@@ -182,7 +182,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,san
 <div class="set-t">Kanallarım (<span id="chCnt">0</span>)</div>
 <div id="cB"></div>
 <div class="set-t">Hakkında</div>
-<div class="set-item"><div class="set-ic" style="background:rgba(162,155,254,.08);color:#a29bfe">📻</div><div class="set-lb"><h4>TürkRadyo v6.0</h4><p>Gelişmiş arama · Sınırsız kanal</p></div></div>
+<div class="set-item"><div class="set-ic" style="background:rgba(162,155,254,.08);color:#a29bfe">📻</div><div class="set-lb"><h4>TürkRadyo v6.1</h4><p>Gelişmiş arama · iOS uyumlu · Denetim desteği</p></div></div>
 </div></div>
 
 </div>
@@ -240,126 +240,171 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,san
 if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(r=>{for(let x of r)x.unregister()});caches.keys().then(n=>{for(let x of n)caches.delete(x)})}
 
 const $=id=>document.getElementById(id);
-const IM={v:.8,d:false,w:false,r:null,init(a){this.a=a;this.v=a.volume||.8;document.addEventListener('visibilitychange',()=>{document.hidden?this.dn():this.up()});window.addEventListener('blur',()=>this.dn());window.addEventListener('focus',()=>this.up());a.addEventListener('pause',()=>{if(!this._u&&pl){this.w=true}})},dn(){if(!this.a||this.a.paused)return;clearTimeout(this.r);this.d=true;this.v=this.a.volume;let v=this.a.volume,t=setInterval(()=>{v=Math.max(.1,v-.04);this.a.volume=v;if(v<=.1)clearInterval(t)},20);$('itr').textContent='🔉 Ses kısıldı';$('itr').classList.add('s')},up(){if(!this.d){if(this.w&&this.a.paused){this.r=setTimeout(()=>{this.a.play().catch(()=>{});this.w=false;$('itr').classList.remove('s')},800)}return}clearTimeout(this.r);this.r=setTimeout(()=>{let v=this.a.volume,t=setInterval(()=>{v=Math.min(this.v,v+.04);this.a.volume=v;if(v>=this.v)clearInterval(t)},25);this.d=false;$('itr').classList.remove('s');if(this.w&&this.a.paused){this.a.play().catch(()=>{});this.w=false}},800)},su(v){this._u=v;if(v)this.w=false},uv(v){if(!this.d)this.v=v}};
+
+/* ============================================
+   HTML ESC - XSS koruması (Sorun #8 düzeltme)
+   ============================================ */
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+/* ============================================
+   DURUM YÖNETİCİSİ
+   Tek merkezden pl durumu yönetimi
+   (Sorun #2, #6, #12 düzeltme)
+   ============================================ */
+let _shouldPlay=false; // Çalıyor olması gereken durumu tutar
+
+function setPl(v){
+  pl=v;
+  _shouldPlay=v;
+  ub();
+  if('mediaSession' in navigator){
+    navigator.mediaSession.playbackState=v?'playing':'paused';
+  }
+}
+
+/* ============================================
+   IM - Interrupt Manager (orijinal, dokunulmadı)
+   ============================================ */
+const IM={v:.8,d:false,w:false,r:null,init(a){this.a=a;this.v=a.volume||.8;
+// visibilitychange IM'de KALDIRILDI → tek merkezde yönetilecek
+// blur/focus IM'de KALDIRILDI → tek merkezde yönetilecek
+a.addEventListener('pause',()=>{if(!this._u&&pl){this.w=true}})},
+dn(){if(!this.a||this.a.paused)return;clearTimeout(this.r);this.d=true;this.v=this.a.volume;let v=this.a.volume,t=setInterval(()=>{v=Math.max(.1,v-.04);this.a.volume=v;if(v<=.1)clearInterval(t)},20);$('itr').textContent='🔉 Ses kısıldı';$('itr').classList.add('s')},
+up(){if(!this.d){if(this.w&&this.a.paused){this.r=setTimeout(()=>{this.a.play().catch(()=>{});this.w=false;$('itr').classList.remove('s')},800)}return}clearTimeout(this.r);this.r=setTimeout(()=>{let v=this.a.volume,t=setInterval(()=>{v=Math.min(this.v,v+.04);this.a.volume=v;if(v>=this.v)clearInterval(t)},25);this.d=false;$('itr').classList.remove('s');if(this.w&&this.a.paused){this.a.play().catch(()=>{});this.w=false}},800)},
+su(v){this._u=v;if(v)this.w=false},uv(v){if(!this.d)this.v=v}};
 
 let ch=[],fv=[],rc=[];
 let cur=null,pl=false,slt=null,sle=null,rtr=0;
 const ad=$('ad');
 
-/* ========================================
-   iOS KESINTI YÖNETİCİSİ
-   Bildirim, arama, kulaklık çıkarma/takma
-   ======================================== */
+/* ============================================
+   iOS KESİNTİ YÖNETİCİSİ
+   Bildirim · Arama · Kulaklık · Denetim
+   (Sorun #1,2,3,4,5,6,12,13 düzeltmeleri)
+   ============================================ */
 const IOS={
-  wasPlaying:false,
-  interrupted:false,
+  _resumeTimer:null,
+  _reloading:false,
 
   init(audio){
     this.a=audio;
 
-    // 1) iOS ses kesintisi (bildirim, arama vb.)
+    // ── iOS WebKit kesinti olayları ──
     audio.addEventListener('webkitInterruptBegin',()=>{
-      if(!audio.paused&&cur){this.wasPlaying=true;this.interrupted=true}
+      if(!audio.paused||_shouldPlay){
+        _shouldPlay=true;
+      }
     });
+
     audio.addEventListener('webkitInterruptEnd',()=>{
-      if(this.wasPlaying&&this.interrupted&&cur){
-        this.interrupted=false;
-        setTimeout(()=>this.resume(),600);
+      if(_shouldPlay&&cur&&!ad._userPause){
+        this._safeResume(700);
       }
     });
 
-    // 2) pause olayını yakala - kullanıcı mı yoksa sistem mi durdurdu
-    audio.addEventListener('pause',()=>{
-      // Kullanıcı tp() ile durdurduysa _userPause=true olur
-      // Sistem durdurduysa (bildirim/arama) _userPause=false kalır
-      if(!this.a._userPause&&cur&&!IM._u){
-        this.wasPlaying=true;
-        this.interrupted=true;
-      }
-    });
-
-    // 3) play olayında sıfırla
-    audio.addEventListener('playing',()=>{
-      this.wasPlaying=false;
-      this.interrupted=false;
-      this.a._userPause=false;
-    });
-
-    // 4) Sayfa tekrar görünür olduğunda
-    document.addEventListener('visibilitychange',()=>{
-      if(!document.hidden&&cur&&this.interrupted){
-        setTimeout(()=>this.resume(),800);
-      }
-    });
-
-    // 5) pageshow - iOS Safari bfcache'den dönüş
-    window.addEventListener('pageshow',(e)=>{
-      if(e.persisted&&cur&&(this.interrupted||audio.paused)){
-        setTimeout(()=>this.resume(),500);
-      }
-    });
-
-    // 6) Kulaklık takıldığında otomatik devam
-    if(navigator.mediaDevices&&navigator.mediaDevices.addEventListener){
+    // ── Kulaklık çıkarma/takma ──
+    if(navigator.mediaDevices&&typeof navigator.mediaDevices.addEventListener==='function'){
       navigator.mediaDevices.addEventListener('devicechange',()=>{
-        if(cur&&this.wasPlaying&&audio.paused){
-          setTimeout(()=>this.resume(),1000);
+        // Kulaklık takıldıysa ve çalıyor olması gerekiyorsa
+        if(cur&&_shouldPlay&&audio.paused&&!ad._userPause){
+          this._safeResume(1200);
         }
       });
     }
 
-    // 7) stalled/ended - stream koptuğunda kurtarma
+    // ── stalled: stream takıldı ──
     audio.addEventListener('stalled',()=>{
-      if(cur&&pl){
+      if(cur&&_shouldPlay&&!ad._userPause){
         setTimeout(()=>{
-          if(audio.paused||audio.readyState<2){
-            this.reload();
+          if(cur&&_shouldPlay&&(audio.paused||audio.readyState<2)){
+            this._safeReload();
           }
-        },3000);
+        },4000);
       }
     });
+
+    // ── ended: canlı yayın bitmez, bağlantı kopmuştur ──
     audio.addEventListener('ended',()=>{
-      // Canlı yayın bitmez, bağlantı kopmuştur
-      if(cur){setTimeout(()=>this.reload(),1500)}
-    });
-
-    // 8) Periyodik kontrol - her 5 saniyede ses çalıyor olması lazımken durmuşsa kurtarma
-    setInterval(()=>{
-      if(cur&&pl&&audio.paused&&!IM._u&&!this.a._userPause){
-        this.resume();
+      if(cur&&_shouldPlay&&!ad._userPause){
+        this._safeReload();
       }
-    },5000);
-  },
-
-  resume(){
-    if(!cur)return;
-    const a=this.a;
-    a.volume=IM.v;
-    a.play().then(()=>{
-      this.wasPlaying=false;
-      this.interrupted=false;
-      pl=true;ub();
-      $('ms').innerHTML='<span class="cdot"></span>Canlı Yayın';
-    }).catch(()=>{
-      // play reddedildiyse stream'i yeniden yükle
-      setTimeout(()=>this.reload(),1000);
     });
+
+    // ── pageshow: iOS bfcache dönüş ──
+    window.addEventListener('pageshow',(e)=>{
+      if(e.persisted&&cur&&_shouldPlay&&audio.paused&&!ad._userPause){
+        this._safeResume(600);
+      }
+    });
+
+    // ── Tek merkezi visibility + focus yönetimi ──
+    // (Sorun #5 düzeltme: 3 ayrı listener yerine tek)
+    document.addEventListener('visibilitychange',()=>{
+      if(document.hidden){
+        IM.dn();
+      }else{
+        IM.up();
+        if(cur&&_shouldPlay&&audio.paused&&!ad._userPause){
+          this._safeResume(800);
+        }
+      }
+    });
+
+    window.addEventListener('blur',()=>IM.dn());
+    window.addEventListener('focus',()=>{
+      IM.up();
+      if(cur&&_shouldPlay&&audio.paused&&!ad._userPause){
+        this._safeResume(800);
+      }
+    });
+
+    // ── Watchdog: periyodik kurtarma ──
+    // (Sorun #12 düzeltme: _shouldPlay kullanır, pl değil)
+    setInterval(()=>{
+      if(cur&&_shouldPlay&&audio.paused&&!ad._userPause&&!this._reloading){
+        this._safeResume(0);
+      }
+    },8000);
   },
 
-  reload(){
-    if(!cur)return;
+  // Güvenli devam: çoklu çağrıları birleştirir (Sorun #5 düzeltme)
+  _safeResume(delay){
+    clearTimeout(this._resumeTimer);
+    this._resumeTimer=setTimeout(()=>{
+      if(!cur||ad._userPause||!_shouldPlay)return;
+      const a=this.a;
+      a.volume=IM.v;
+      a.play().then(()=>{
+        setPl(true);
+        rtr=0;
+        $('ms').innerHTML='<span class="cdot"></span>Canlı Yayın';
+        $('itr').classList.remove('s');
+        rA();rF(); // Sorun #13: kart görünümü güncelle
+      }).catch(()=>{
+        // play reddedildi → stream'i yeniden yükle
+        this._safeReload();
+      });
+    },Math.max(0,delay));
+  },
+
+  // Güvenli yeniden yükleme (Sorun #3 düzeltme)
+  _safeReload(){
+    if(!cur||this._reloading||ad._userPause)return;
+    this._reloading=true;
     const a=this.a;
-    const src=cur.u;
-    // Önbellek kırıcı ile yeniden yükle
-    a.src=src+(src.includes('?')?'&':'?')+'_t='+Date.now();
+    // Stream URL'sini olduğu gibi kullan, cache-buster EKLEME
+    // (Sorun #3: M3U8/CDN URL kırılma riski)
+    a.src=cur.u;
     a.load();
     a.volume=IM.v;
     a.play().then(()=>{
-      pl=true;ub();
-      this.wasPlaying=false;
-      this.interrupted=false;
+      setPl(true);
+      rtr=0;
+      this._reloading=false;
       $('ms').innerHTML='<span class="cdot"></span>Canlı Yayın';
-    }).catch(()=>{});
+    }).catch(()=>{
+      this._reloading=false;
+    });
   }
 };
 
@@ -369,36 +414,85 @@ ld();rA();rF();rR();rC();
 const eq=$('fe');for(let i=0;i<14;i++){const b=document.createElement('i');b.style.height=(Math.random()*26+8)+'px';b.style.animationDelay=(Math.random()*.55)+'s';b.style.animationDuration=(.28+Math.random()*.4)+'s';eq.appendChild(b)}
 IM.init(ad);
 IOS.init(ad);
-document.addEventListener('touchstart',function u(){ad.play().then(()=>ad.pause()).catch(()=>{});document.removeEventListener('touchstart',u)},{once:true});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&cur&&pl&&ad.paused)setTimeout(()=>{ad.play().catch(()=>{ad.src=cur.u;ad.load();ad.play().catch(()=>{})})},500)});
-setTimeout(()=>$('spl').classList.add('h'),1600);
-ad.addEventListener('playing',()=>{pl=true;rtr=0;IM.su(false);ub();$('ms').innerHTML='<span class="cdot"></span>Canlı Yayın'});
-ad.addEventListener('pause',()=>{pl=false;ub()});
-ad.addEventListener('error',()=>{if(cur&&rtr<3){rtr++;tt('🔄 Deneniyor ('+rtr+'/3)...');setTimeout(()=>{if(cur){ad.src=cur.u;ad.load();ad.play().catch(()=>{})}},2000)}else{tt('❌ Yanıt yok');pl=false;ub()}});
-ad.addEventListener('waiting',()=>{$('ms').innerHTML='<span class="cdot" style="background:orange"></span>Yükleniyor...'});
 
-// MediaSession - Denetim Merkezi / Kilit Ekranı kontrolleri
+// İlk dokunuşta ses kilidini aç
+document.addEventListener('touchstart',function u(){ad.play().then(()=>ad.pause()).catch(()=>{});document.removeEventListener('touchstart',u)},{once:true});
+
+setTimeout(()=>$('spl').classList.add('h'),1600);
+
+// ── Tek merkezi audio olayları ──
+ad.addEventListener('playing',()=>{
+  setPl(true);
+  rtr=0;
+  IM.su(false);
+  ad._userPause=false;
+  $('ms').innerHTML='<span class="cdot"></span>Canlı Yayın';
+  rA();rF();
+});
+
+ad.addEventListener('pause',()=>{
+  // pl=false yap AMA _shouldPlay'e DOKUNMA
+  // Çünkü sistem durdurmuş olabilir, kurtarma gerekebilir
+  pl=false;
+  ub();
+  if('mediaSession' in navigator){
+    // Kullanıcı durdurduysa paused, değilse none (iOS devam sinyali)
+    navigator.mediaSession.playbackState=ad._userPause?'paused':'none';
+  }
+});
+
+ad.addEventListener('error',(e)=>{
+  if(cur&&_shouldPlay&&!ad._userPause&&rtr<4){
+    rtr++;
+    tt('🔄 Deneniyor ('+rtr+'/4)...');
+    $('ms').innerHTML='<span class="cdot" style="background:orange"></span>Yeniden bağlanıyor...';
+    setTimeout(()=>{
+      if(cur&&_shouldPlay){
+        ad.src=cur.u;
+        ad.load();
+        ad.volume=IM.v;
+        ad.play().catch(()=>{});
+      }
+    },2000*rtr); // Her denemede daha uzun bekle
+  }else if(rtr>=4){
+    tt('❌ Bağlantı kurulamadı');
+    _shouldPlay=false;
+    pl=false;
+    ub();
+  }
+});
+
+ad.addEventListener('waiting',()=>{
+  $('ms').innerHTML='<span class="cdot" style="background:orange"></span>Yükleniyor...';
+});
+
+// ── Denetim Merkezi / Kilit Ekranı ──
 setupMediaSession();
 }
 
-/* ========================================
+/* ============================================
    MEDYA SESSION - DENETİM MERKEZİ
-   ======================================== */
+   (Sorun #10 düzeltme: tek yerde tanımla)
+   ============================================ */
 function setupMediaSession(){
   if(!('mediaSession' in navigator))return;
 
+  // Play: denetimden veya kulaklık butonundan
   navigator.mediaSession.setActionHandler('play',()=>{
     if(!cur)return;
     ad._userPause=false;
+    _shouldPlay=true;
     IM.su(false);
     ad.play().catch(()=>{
-      // Stream kopmuş olabilir, yeniden yükle
-      IOS.reload();
+      IOS._safeReload();
     });
   });
 
+  // Pause: denetimden veya kulaklık butonundan
   navigator.mediaSession.setActionHandler('pause',()=>{
+    if(!cur)return;
     ad._userPause=true;
+    _shouldPlay=false;
     IM.su(true);
     ad.pause();
     pl=false;
@@ -408,55 +502,185 @@ function setupMediaSession(){
   navigator.mediaSession.setActionHandler('previoustrack',()=>pvS());
   navigator.mediaSession.setActionHandler('nexttrack',()=>nxS());
 
-  // Kulaklık butonları (seekbackward/seekforward bazı kulaklıklarda tetiklenir)
-  try{
-    navigator.mediaSession.setActionHandler('seekbackward',()=>pvS());
-    navigator.mediaSession.setActionHandler('seekforward',()=>nxS());
-  }catch(e){}
+  try{navigator.mediaSession.setActionHandler('seekbackward',()=>pvS())}catch(e){}
+  try{navigator.mediaSession.setActionHandler('seekforward',()=>nxS())}catch(e){}
+  try{navigator.mediaSession.setActionHandler('stop',()=>{
+    if(!cur)return;
+    ad._userPause=true;
+    _shouldPlay=false;
+    IM.su(true);
+    ad.pause();
+    pl=false;
+    ub();
+  })}catch(e){}
+}
 
+/* ============================================
+   uM - MediaSession metadata güncelleme
+   (Sorun #10,11 düzeltme: handler tekrar yazmaz,
+   artwork güvenli)
+   ============================================ */
+function uM(s){
+  if(!('mediaSession' in navigator))return;
+  // Sadece metadata güncelle, handler'lara DOKUNMA
+  const artSvg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+    +'<rect width="512" height="512" rx="80" fill="'+esc(s.c||'#6c5ce7')+'"/>'
+    +'<text x="256" y="340" font-size="240" text-anchor="middle">'+esc(s.e)+'</text></svg>';
   try{
-    navigator.mediaSession.setActionHandler('stop',()=>{
-      ad._userPause=true;
-      IM.su(true);
-      ad.pause();
-      pl=false;
-      ub();
+    navigator.mediaSession.metadata=new MediaMetadata({
+      title:s.n,
+      artist:'Canlı Yayın',
+      album:s.g||'TürkRadyo',
+      artwork:[{
+        src:'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(artSvg),
+        sizes:'512x512',
+        type:'image/svg+xml'
+      }]
     });
   }catch(e){}
+  navigator.mediaSession.playbackState='playing';
 }
 
 function ld(){try{ch=JSON.parse(localStorage.getItem('ch6')||'[]');fv=JSON.parse(localStorage.getItem('fv6')||'[]');rc=JSON.parse(localStorage.getItem('rc6')||'[]')}catch(e){ch=[];fv=[];rc=[]}}
 function sv(){localStorage.setItem('ch6',JSON.stringify(ch));localStorage.setItem('fv6',JSON.stringify(fv));localStorage.setItem('rc6',JSON.stringify(rc))}
 
-function rA(){const b=$('aB');if(!ch.length){b.innerHTML='<div class="empty"><div class="eic">📡</div><h3>Henüz kanal yok</h3><p>➕ butonuyla radyo arayıp ekleyin</p><button class="ebtn" onclick="openM()">📻 Radyo Ekle</button></div>';return}b.innerHTML=`<div class="ttl">Kanallarım · ${ch.length}</div>`+ch.map(x=>cd(x)).join('')}
+function rA(){const b=$('aB');if(!ch.length){b.innerHTML='<div class="empty"><div class="eic">📡</div><h3>Henüz kanal yok</h3><p>➕ butonuyla radyo arayıp ekleyin</p><button class="ebtn" onclick="openM()">📻 Radyo Ekle</button></div>';return}b.innerHTML='<div class="ttl">Kanallarım · '+ch.length+'</div>'+ch.map(x=>cd(x)).join('')}
 
-function cd(s){const iv=fv.includes(s.id),ac=cur&&cur.id===s.id;return`<div class="card${ac?' on':''}" onclick="py('${s.id}')"><div class="cico" style="background:${s.c||'var(--ac)'}">${ac&&pl?'<div class="ceq"><i></i><i></i><i></i><i></i></div>':s.e}</div><div class="cinf"><div class="cnam">${s.n}</div><div class="cgen">${ac?'<span class="cdot"></span>':''}${s.g||'Radyo'}</div></div><div onclick="event.stopPropagation()"><button class="cfav" onclick="tf('${s.id}')">${iv?'❤️':'🤍'}</button></div></div>`}
+/* ============================================
+   cd - Kart oluşturma
+   (Sorun #8,9 düzeltme: XSS koruması, id güvenliği)
+   ============================================ */
+function cd(s){
+  const iv=fv.includes(s.id),ac=cur&&cur.id===s.id;
+  const safeId=esc(s.id);
+  const safeName=esc(s.n);
+  const safeGenre=esc(s.g||'Radyo');
+  return '<div class="card'+(ac?' on':'')+'" onclick="py(\''+safeId+'\')">'
+    +'<div class="cico" style="background:'+(s.c||'var(--ac)')+'">'
+    +(ac&&pl?'<div class="ceq"><i></i><i></i><i></i><i></i></div>':esc(s.e))
+    +'</div><div class="cinf"><div class="cnam">'+safeName+'</div>'
+    +'<div class="cgen">'+(ac?'<span class="cdot"></span>':'')+safeGenre+'</div>'
+    +'</div><div onclick="event.stopPropagation()">'
+    +'<button class="cfav" onclick="tf(\''+safeId+'\')">'+(iv?'❤️':'🤍')+'</button>'
+    +'</div></div>';
+}
 
-function py(id){const s=ch.find(x=>x.id===id);if(!s)return;cur=s;rtr=0;IM.su(false);ad._userPause=false;IOS.wasPlaying=false;IOS.interrupted=false;$('mp').classList.add('s');$('scr').classList.add('mp-on');$('mn').textContent=s.n;$('mi').textContent=s.e;$('mi').style.background=s.c||'var(--ac)';$('fn').textContent=s.n;$('fg').textContent=s.g||'Radyo';$('fa').textContent=s.e;$('fa').style.background=`linear-gradient(135deg,${s.c||'var(--ac)'},${aj(s.c||'#6c5ce7')})`;$('ms').innerHTML='<span class="cdot" style="background:orange"></span>Bağlanıyor...';ufF();aR(s);ad.src=s.u;ad.load();ad.volume=IM.v;ad.play().then(()=>{pl=true;ub();uM(s)}).catch(()=>{setTimeout(()=>{ad.play().then(()=>{pl=true;ub();uM(s)}).catch(()=>{tt('⚠️ Yanıt yok');pl=false;ub()})},1500)});rA();rF()}
+/* ============================================
+   py - Kanal çal
+   (Sorun #4 düzeltme: uM her durumda çağrılır)
+   ============================================ */
+function py(id){
+  const s=ch.find(x=>x.id===id);
+  if(!s)return;
+  cur=s;
+  rtr=0;
+  ad._userPause=false;
+  _shouldPlay=true;
+  IM.su(false);
+  $('mp').classList.add('s');
+  $('scr').classList.add('mp-on');
+  $('mn').textContent=s.n;
+  $('mi').textContent=s.e;
+  $('mi').style.background=s.c||'var(--ac)';
+  $('fn').textContent=s.n;
+  $('fg').textContent=s.g||'Radyo';
+  $('fa').textContent=s.e;
+  $('fa').style.background='linear-gradient(135deg,'+(s.c||'var(--ac)')+','+aj(s.c||'#6c5ce7')+')';
+  $('ms').innerHTML='<span class="cdot" style="background:orange"></span>Bağlanıyor...';
+  ufF();
+  aR(s);
 
-function tp(){if(!cur)return;if(pl){ad._userPause=true;IM.su(true);ad.pause()}else{ad._userPause=false;IM.su(false);ad.play().catch(()=>{ad.src=cur.u;ad.load();ad.play().catch(()=>tt('⚠️ Tekrar deneyin'))})}}
-function ub(){const i=pl?'⏸':'▶';$('pp').textContent=i;$('fp2').textContent=i;$('fe').classList.toggle('x',!pl);
-// MediaSession durumunu güncelle
-if('mediaSession' in navigator){navigator.mediaSession.playbackState=pl?'playing':'paused'}}
+  // Metadata'yı HEMEN güncelle (play başarısız olsa bile denetimde görünsün)
+  uM(s);
+
+  ad.src=s.u;
+  ad.load();
+  ad.volume=IM.v;
+  ad.play().then(()=>{
+    setPl(true);
+  }).catch(()=>{
+    // İlk deneme başarısız, 1.5s sonra tekrar
+    setTimeout(()=>{
+      if(cur&&cur.id===id&&_shouldPlay){
+        ad.play().then(()=>{
+          setPl(true);
+        }).catch(()=>{
+          tt('⚠️ Bağlantı zayıf, yeniden deneniyor...');
+          // Bir kez daha dene
+          setTimeout(()=>{
+            if(cur&&cur.id===id&&_shouldPlay){
+              ad.src=s.u;
+              ad.load();
+              ad.volume=IM.v;
+              ad.play().catch(()=>{
+                tt('❌ Yanıt yok');
+                _shouldPlay=false;
+                pl=false;
+                ub();
+              });
+            }
+          },2000);
+        });
+      }
+    },1500);
+  });
+  rA();rF();
+}
+
+/* ============================================
+   tp - Oynat/Durdur
+   (Sorun #1 düzeltme: _userPause her dalda)
+   ============================================ */
+function tp(){
+  if(!cur)return;
+  if(pl){
+    // KULLANICI durduruyor
+    ad._userPause=true;
+    _shouldPlay=false;
+    IM.su(true);
+    ad.pause();
+    pl=false;
+    ub();
+  }else{
+    // KULLANICI başlatıyor
+    ad._userPause=false;
+    _shouldPlay=true;
+    IM.su(false);
+    ad.play().catch(()=>{
+      // Stream kopmuş olabilir
+      ad.src=cur.u;
+      ad.load();
+      ad.volume=IM.v;
+      ad.play().catch(()=>tt('⚠️ Tekrar deneyin'));
+    });
+  }
+}
+
+function ub(){
+  const i=pl?'⏸':'▶';
+  $('pp').textContent=i;
+  $('fp2').textContent=i;
+  $('fe').classList.toggle('x',!pl);
+}
+
 function sV(v){const vol=v/100;ad.volume=vol;IM.uv(vol);$('mv').value=v;$('fv').value=v}
 function pvS(){if(!cur||ch.length<2)return;const i=ch.findIndex(x=>x.id===cur.id);py((i>0?ch[i-1]:ch[ch.length-1]).id)}
 function nxS(){if(!cur||ch.length<2)return;const i=ch.findIndex(x=>x.id===cur.id);py((i<ch.length-1?ch[i+1]:ch[0]).id)}
-function uM(s){if(!('mediaSession' in navigator))return;navigator.mediaSession.metadata=new MediaMetadata({title:s.n,artist:'Canlı',album:s.g||'TürkRadyo',artwork:[{src:'data:image/svg+xml,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="80" fill="${s.c||'#6c5ce7'}"/><text x="256" y="340" font-size="240" text-anchor="middle">${s.e}</text></svg>`),sizes:'512x512',type:'image/svg+xml'}]});navigator.mediaSession.playbackState='playing'}
 
 function tf(id){const i=fv.indexOf(id);if(i>=0){fv.splice(i,1);tt('💔 Çıkarıldı')}else{fv.push(id);tt('❤️ Eklendi')}sv();rA();rF();ufF()}
 function tfC(){if(cur)tf(cur.id)}
 function ufF(){if(cur)$('ff').textContent=fv.includes(cur.id)?'❤️':'🤍'}
-function rF(){const b=$('fB'),fs=ch.filter(x=>fv.includes(x.id));if(!fs.length){b.innerHTML='<div class="empty"><div class="eic">💜</div><h3>Favori yok</h3><p>Kanallarım\'dan ❤️ ile ekleyin<br>veya ➕ ile yeni radyo arayın</p><button class="ebtn" onclick="openM()">📻 Radyo Ekle</button></div>';return}b.innerHTML=`<div class="ttl">⭐ Favorilerim · ${fs.length}</div>`+fs.map(x=>cd(x)).join('')}
+function rF(){const b=$('fB'),fs=ch.filter(x=>fv.includes(x.id));if(!fs.length){b.innerHTML='<div class="empty"><div class="eic">💜</div><h3>Favori yok</h3><p>Kanallarım\'dan ❤️ ile ekleyin<br>veya ➕ ile yeni radyo arayın</p><button class="ebtn" onclick="openM()">📻 Radyo Ekle</button></div>';return}b.innerHTML='<div class="ttl">⭐ Favorilerim · '+fs.length+'</div>'+fs.map(x=>cd(x)).join('')}
 
 function aR(s){rc=rc.filter(r=>r.id!==s.id);rc.unshift({id:s.id,t:Date.now()});if(rc.length>30)rc=rc.slice(0,30);sv();rR()}
-function rR(){const b=$('rB');if(!rc.length){b.innerHTML='<div class="empty"><div class="eic">🕐</div><h3>Geçmiş yok</h3><p>Dinlediğiniz radyolar burada görünür</p></div>';return}b.innerHTML='<div class="ttl">Son Dinlenenler</div>'+rc.map(r=>{const s=ch.find(x=>x.id===r.id);if(!s)return'';return`<div class="card" onclick="py('${r.id}')"><div class="cico" style="background:${s.c||'var(--ac)'}">${s.e}</div><div class="cinf"><div class="cnam">${s.n}</div><div class="cgen">${ft(r.t)}</div></div></div>`}).join('')}
+function rR(){const b=$('rB');if(!rc.length){b.innerHTML='<div class="empty"><div class="eic">🕐</div><h3>Geçmiş yok</h3><p>Dinlediğiniz radyolar burada görünür</p></div>';return}b.innerHTML='<div class="ttl">Son Dinlenenler</div>'+rc.map(r=>{const s=ch.find(x=>x.id===r.id);if(!s)return'';return'<div class="card" onclick="py(\''+esc(r.id)+'\')"><div class="cico" style="background:'+(s.c||'var(--ac)')+'">'+esc(s.e)+'</div><div class="cinf"><div class="cnam">'+esc(s.n)+'</div><div class="cgen">'+ft(r.t)+'</div></div></div>'}).join('')}
 function ft(t){const m=Math.floor((Date.now()-t)/60000);if(m<1)return'Az önce';if(m<60)return m+'dk';const h=Math.floor(m/60);if(h<24)return h+'sa';return Math.floor(h/24)+'g'}
 
 function gp(p,b){document.querySelectorAll('.pg').forEach(x=>x.classList.remove('a'));document.querySelectorAll('.bnav button').forEach(x=>x.classList.remove('a'));$({f:'pF',a:'pA',r:'pR',s:'pS'}[p]).classList.add('a');b.classList.add('a');if(p==='f')rF();if(p==='r')rR();if(p==='s')rC();$('scr').scrollTop=0}
 function oFP(){$('fp').classList.add('s')}
 function cFP(){$('fp').classList.remove('s')}
 
-function stm(m){if(slt){clearInterval(slt);slt=null}const r=$('sr');if(m==0){sle=null;r.classList.remove('s');return}sle=Date.now()+m*60000;r.classList.add('s');slt=setInterval(()=>{const l=sle-Date.now();if(l<=0){ad._userPause=true;IM.su(true);ad.pause();pl=false;ub();clearInterval(slt);slt=null;r.classList.remove('s');$('stsel').value='0';tt('😴 Durdu');return}r.textContent=`⏰ ${Math.floor(l/60000)}:${Math.floor((l%60000)/1000).toString().padStart(2,'0')}`},1000);tt(`⏰ ${m}dk sonra`)}
+function stm(m){if(slt){clearInterval(slt);slt=null}const r=$('sr');if(m==0){sle=null;r.classList.remove('s');return}sle=Date.now()+m*60000;r.classList.add('s');slt=setInterval(()=>{const l=sle-Date.now();if(l<=0){ad._userPause=true;_shouldPlay=false;IM.su(true);ad.pause();pl=false;ub();clearInterval(slt);slt=null;r.classList.remove('s');$('stsel').value='0';tt('😴 Durdu');return}r.textContent='⏰ '+Math.floor(l/60000)+':'+Math.floor((l%60000)/1000).toString().padStart(2,'0')},1000);tt('⏰ '+m+'dk sonra')}
 
 function openM(){$('mo').classList.add('s')}
 function clM(){$('mo').classList.remove('s');$('r1').innerHTML='';$('r2').innerHTML='';$('r3').innerHTML=''}
@@ -465,42 +689,49 @@ function addCh(name,url,genre,emoji){const cl=['#e74c3c','#3498db','#2ecc71','#f
 
 function doAdd(){const n=$('an').value.trim(),u=$('aurl').value.trim(),c=$('acat').value,e=$('aemo').value||'📻';if(!n||!u){tt('⚠️ Ad ve URL gerekli');return}if(addCh(n,u,c,e)){$('an').value='';$('aurl').value='';$('aemo').value='📻';clM()}}
 
-function delCh(id){if(!confirm('Silinsin mi?'))return;ch=ch.filter(x=>x.id!==id);fv=fv.filter(f=>f!==id);rc=rc.filter(r=>r.id!==id);if(cur&&cur.id===id){cur=null;ad.pause();pl=false;$('mp').classList.remove('s');$('scr').classList.remove('mp-on')}sv();rA();rF();rR();rC();tt('🗑️ Silindi')}
-function rC(){const b=$('cB');$('chCnt').textContent=ch.length;if(!ch.length){b.innerHTML='<div class="set-item"><div class="set-ic" style="background:rgba(255,255,255,.02)">📡</div><div class="set-lb"><h4>Kanal yok</h4><p>➕ ile radyo arayıp ekleyin</p></div></div>';return}b.innerHTML=ch.map(s=>`<div class="set-item"><div class="set-ic" style="background:${s.c}">${s.e}</div><div class="set-lb"><h4>${s.n}</h4><p>${s.g||'Radyo'}</p></div><button class="del-b" onclick="event.stopPropagation();delCh('${s.id}')">🗑️</button></div>`).join('')}
+function delCh(id){if(!confirm('Silinsin mi?'))return;ch=ch.filter(x=>x.id!==id);fv=fv.filter(f=>f!==id);rc=rc.filter(r=>r.id!==id);if(cur&&cur.id===id){cur=null;_shouldPlay=false;ad._userPause=true;ad.pause();pl=false;$('mp').classList.remove('s');$('scr').classList.remove('mp-on')}sv();rA();rF();rR();rC();tt('🗑️ Silindi')}
+function rC(){const b=$('cB');$('chCnt').textContent=ch.length;if(!ch.length){b.innerHTML='<div class="set-item"><div class="set-ic" style="background:rgba(255,255,255,.02)">📡</div><div class="set-lb"><h4>Kanal yok</h4><p>➕ ile radyo arayıp ekleyin</p></div></div>';return}b.innerHTML=ch.map(s=>'<div class="set-item"><div class="set-ic" style="background:'+s.c+'">'+esc(s.e)+'</div><div class="set-lb"><h4>'+esc(s.n)+'</h4><p>'+esc(s.g||'Radyo')+'</p></div><button class="del-b" onclick="event.stopPropagation();delCh(\''+esc(s.id)+'\')">🗑️</button></div>').join('')}
 
+/* ============================================
+   ARAMA
+   (Sorun #8 düzeltme: sonuçlarda XSS koruması)
+   (Sorun #14 düzeltme: gereksiz 3. arama kaldırıldı)
+   ============================================ */
 const APIS=['de1','nl1','at1','de2'];
-async function api(ep){for(const s of APIS){try{const r=await fetch(`https://${s}.api.radio-browser.info/json/${ep}`,{signal:AbortSignal.timeout(6000)});if(r.ok)return await r.json()}catch(e){}}return null}
+async function api(ep){for(const s of APIS){try{const r=await fetch('https://'+s+'.api.radio-browser.info/json/'+ep,{signal:AbortSignal.timeout(6000)});if(r.ok)return await r.json()}catch(e){}}return null}
 
 async function doSearch(query,extra,target,storeKey){
 const el=$(target);el.innerHTML='<div class="sr-load">🔍 Aranıyor...</div>';
 let all=[];const seen=new Set();
-const d1=await api(`stations/search?name=${encodeURIComponent(query)}${extra}&limit=35&hidebroken=true&order=clickcount&reverse=true`);
+// İsimle ara
+const d1=await api('stations/search?name='+encodeURIComponent(query)+extra+'&limit=35&hidebroken=true&order=clickcount&reverse=true');
 if(d1)d1.forEach(x=>{if(!seen.has(x.stationuuid)){seen.add(x.stationuuid);all.push(x)}});
-if(all.length<8){const d2=await api(`stations/search?tag=${encodeURIComponent(query)}${extra}&limit=20&hidebroken=true&order=clickcount&reverse=true`);if(d2)d2.forEach(x=>{if(!seen.has(x.stationuuid)){seen.add(x.stationuuid);all.push(x)}})}
-if(all.length<5){const d3=await api(`stations/search?name=${encodeURIComponent(query)}&limit=20&hidebroken=true&order=clickcount&reverse=true`);if(d3)d3.forEach(x=>{if(!seen.has(x.stationuuid)){seen.add(x.stationuuid);all.push(x)}})}
+// Sonuç azsa tag ile ara
+if(all.length<8){const d2=await api('stations/search?tag='+encodeURIComponent(query)+extra+'&limit=20&hidebroken=true&order=clickcount&reverse=true');if(d2)d2.forEach(x=>{if(!seen.has(x.stationuuid)){seen.add(x.stationuuid);all.push(x)}})}
+// (Sorun #14: 3. gereksiz arama kaldırıldı)
 if(!all.length){el.innerHTML='<div class="sr-load">😕 Bulunamadı. Farklı terim deneyin.</div>';return}
 window[storeKey]=all;
-el.innerHTML='<div class="srch-res">'+all.map((x,i)=>{const url=x.url_resolved||x.url;const added=ch.find(a=>a.u===url);return`<div class="sr-item"><div class="sr-inf"><div class="sr-nm">${x.name}</div><div class="sr-tg">${x.country||''} · ${x.tags?x.tags.split(',').slice(0,2).join(', '):'—'} · ${x.bitrate||'?'}kbps</div></div>${added?'<span class="sr-ok">✓ Ekli</span>':`<button class="sr-ab" onclick="pick('${storeKey}',${i})">+ Ekle</button>`}</div>`}).join('')+'</div>'}
+renderSR(all,el,storeKey)}
 
 function s1(){const q=$('q1').value.trim();if(!q){tt('⚠️ Arama yazın');return}doSearch(q,'&countrycode=TR','r1','_t')}
 function s2(){const q=$('q2').value.trim();if(!q){tt('⚠️ Arama yazın');return}doSearch(q,'','r2','_g')}
 function s3(){const q=$('q3').value.trim();if(!q){tt('⚠️ Tür yazın');return}
 const el=$('r3');el.innerHTML='<div class="sr-load">🔍 Aranıyor...</div>';
-api(`stations/search?tag=${encodeURIComponent(q)}&countrycode=TR&limit=30&hidebroken=true&order=clickcount&reverse=true`).then(d=>{
-if(!d||!d.length){api(`stations/search?tag=${encodeURIComponent(q)}&limit=30&hidebroken=true&order=clickcount&reverse=true`).then(d2=>{if(!d2||!d2.length){el.innerHTML='<div class="sr-load">😕 Bulunamadı.</div>';return}window._tag=d2;renderSR(d2,el,'_tag')});return}
+api('stations/search?tag='+encodeURIComponent(q)+'&countrycode=TR&limit=30&hidebroken=true&order=clickcount&reverse=true').then(d=>{
+if(!d||!d.length){api('stations/search?tag='+encodeURIComponent(q)+'&limit=30&hidebroken=true&order=clickcount&reverse=true').then(d2=>{if(!d2||!d2.length){el.innerHTML='<div class="sr-load">😕 Bulunamadı.</div>';return}window._tag=d2;renderSR(d2,el,'_tag')});return}
 window._tag=d;renderSR(d,el,'_tag')})}
 
-function renderSR(data,el,key){el.innerHTML='<div class="srch-res">'+data.map((x,i)=>{const url=x.url_resolved||x.url;const added=ch.find(a=>a.u===url);return`<div class="sr-item"><div class="sr-inf"><div class="sr-nm">${x.name}</div><div class="sr-tg">${x.country||''} · ${x.tags?x.tags.split(',').slice(0,2).join(', '):'—'} · ${x.bitrate||'?'}kbps</div></div>${added?'<span class="sr-ok">✓ Ekli</span>':`<button class="sr-ab" onclick="pick('${key}',${i})">+ Ekle</button>`}</div>`}).join('')+'</div>'}
+function renderSR(data,el,key){el.innerHTML='<div class="srch-res">'+data.map((x,i)=>{const url=x.url_resolved||x.url;const added=ch.find(a=>a.u===url);return'<div class="sr-item"><div class="sr-inf"><div class="sr-nm">'+esc(x.name)+'</div><div class="sr-tg">'+esc(x.country||'')+' · '+(x.tags?esc(x.tags.split(',').slice(0,2).join(', ')):'—')+' · '+(x.bitrate||'?')+'kbps</div></div>'+(added?'<span class="sr-ok">✓ Ekli</span>':'<button class="sr-ab" onclick="pick(\''+key+'\','+i+')">+ Ekle</button>')+'</div>'}).join('')+'</div>'}
 
 function pick(key,i){const r=window[key][i];if(!r)return;const url=r.url_resolved||r.url;const tags=(r.tags||'').toLowerCase();let g='Diğer';if(tags.includes('pop'))g='Pop';else if(tags.includes('rock'))g='Rock';else if(tags.match(/jazz/))g='Caz';else if(tags.match(/news|haber|talk/))g='Haber';else if(tags.match(/türk|turkish|folk/))g='THM';else if(tags.match(/islam|quran|dini/))g='Dini';else if(tags.match(/electro|dance|edm|house|techno/))g='Elektronik';else if(tags.match(/classic/))g='TSM';else if(tags.match(/sport/))g='Spor';else if(tags.match(/child|kid|çocuk/))g='Çocuk';
 if(addCh(r.name,url,g,'📻')){
 if(key==='_t')s1();else if(key==='_g')s2();else if(key==='_tag')s3()}}
 
-function xp(){const d={ch,fv,rc};const b=new Blob([JSON.stringify(d)],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='turkradyo_yedek.json';a.click();URL.revokeObjectURL(u);tt('💾 İndirildi')}
+function xp(){const d={ch:ch,fv:fv,rc:rc};const b=new Blob([JSON.stringify(d)],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='turkradyo_yedek.json';a.click();URL.revokeObjectURL(u);tt('💾 İndirildi')}
 function doIm(ev){const f=ev.target.files[0];if(!f)return;const r=new FileReader();r.onload=function(e){try{const d=JSON.parse(e.target.result);if(d.ch)ch=d.ch;if(d.fv)fv=d.fv;if(d.rc)rc=d.rc;sv();rA();rF();rR();rC();tt('✅ Yüklendi')}catch(x){tt('❌ Hata')}};r.readAsText(f);ev.target.value=''}
-function doRs(){if(!confirm('Tüm veriler silinecek?'))return;ch=[];fv=[];rc=[];cur=null;ad.pause();pl=false;$('mp').classList.remove('s');$('scr').classList.remove('mp-on');sv();rA();rF();rR();rC();tt('🗑️ Sıfırlandı')}
+function doRs(){if(!confirm('Tüm veriler silinecek?'))return;ch=[];fv=[];rc=[];cur=null;_shouldPlay=false;ad._userPause=true;ad.pause();pl=false;$('mp').classList.remove('s');$('scr').classList.remove('mp-on');sv();rA();rF();rR();rC();tt('🗑️ Sıfırlandı')}
 
-function aj(h){try{return`rgb(${Math.max(0,parseInt(h.slice(1,3),16)-50)},${Math.max(0,parseInt(h.slice(3,5),16)-30)},${Math.min(255,parseInt(h.slice(5,7),16)+40)})`}catch(e){return'#4a3ab5'}}
+function aj(h){try{return'rgb('+Math.max(0,parseInt(h.slice(1,3),16)-50)+','+Math.max(0,parseInt(h.slice(3,5),16)-30)+','+Math.min(255,parseInt(h.slice(5,7),16)+40)+')'}catch(e){return'#4a3ab5'}}
 function tt(m){const t=$('tst');t.textContent=m;t.classList.add('s');setTimeout(()=>t.classList.remove('s'),2400)}
 
 init();
