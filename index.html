@@ -7,6 +7,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="TürkRadyo">
 <meta name="theme-color" content="#06060b">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon.svg">
 <title>TürkRadyo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -310,6 +313,13 @@ background-repeat:repeat;background-size:128px 128px}
 .bnav button svg{width:20px;height:20px;transition:transform .2s var(--transition)}
 .bnav button:active svg{transform:scale(.85)}
 
+/* ─── DRAG & DROP ─── */
+.card.dragging{opacity:.5;transform:scale(.96);z-index:100;box-shadow:0 8px 32px rgba(124,108,240,.3)}
+.card.drag-over{border-top:2px solid var(--ac);margin-top:-2px}
+.drag-handle{display:none;width:20px;height:20px;color:var(--tx3);cursor:grab;flex-shrink:0;touch-action:none;font-size:12px;opacity:.4;transition:opacity .2s}
+.drag-handle:active{cursor:grabbing;opacity:.8}
+.fav-mode .drag-handle{display:flex;align-items:center;justify-content:center}
+
 /* ─── SCROLLBAR ─── */
 .scroll::-webkit-scrollbar{width:3px}.scroll::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:2px}
 .fp-body::-webkit-scrollbar{width:3px}.fp-body::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:2px}
@@ -373,7 +383,7 @@ background-repeat:repeat;background-size:128px 128px}
         <div class="set-t">Kanallarım (<span id="chCount">0</span>)</div>
         <div id="chList"></div>
         <div class="set-t">Hakkında</div>
-        <div class="set-row" style="cursor:default"><div class="set-ic" style="background:rgba(180,169,255,.08);color:#b4a9ff">📻</div><div class="set-lb"><h4>TürkRadyo v10.0</h4><p>Yeni UI · Visualizer · Gelişmiş animasyonlar</p></div></div>
+        <div class="set-row" style="cursor:default"><div class="set-ic" style="background:rgba(180,169,255,.08);color:#b4a9ff">📻</div><div class="set-lb"><h4>TürkRadyo v11.0</h4><p>PWA · Radyo Logoları · Favori Sıralama · Gelişmiş iOS Desteği</p></div></div>
       </div>
     </div>
   </div>
@@ -472,6 +482,7 @@ background-repeat:repeat;background-size:128px 128px}
       <select id="inC"><option>Pop</option><option>Rock</option><option>Haber</option><option>THM</option><option>TSM</option><option>Arabesk</option><option>Caz</option><option>Elektronik</option><option>Karma</option><option>Dini</option><option>Çocuk</option><option>Spor</option><option>Diğer</option></select>
     </div>
     <div class="fg"><label>Emoji</label><input id="inE" maxlength="2" value="📻" style="width:70px"></div>
+    <div class="fg"><label>Logo URL (opsiyonel)</label><input id="inImg" placeholder="https://...logo.png" autocomplete="off" inputmode="url"><small>Radyo logosu (PNG/JPG)</small></div>
     <div class="fbtn-r"><button class="fbtn fc" id="btnMCancel">İptal</button><button class="fbtn fk" id="btnMAdd">Ekle</button></div>
   </div>
 </div>
@@ -523,7 +534,7 @@ let _filterGenre='Tümü',_searchQ='';
 
 function dataLoad(){
   const rCh=lsLoad(LS.CH,[]),rFv=lsLoad(LS.FV,[]),rRc=lsLoad(LS.RC,[]);
-  ch=Array.isArray(rCh)?rCh.filter(x=>x&&typeof x==='object'&&typeof x.id==='string'&&x.id&&typeof x.n==='string'&&x.n.trim()&&typeof x.u==='string'&&isUrl(x.u)).map(x=>({id:x.id,n:String(x.n).slice(0,MAX_N),g:typeof x.g==='string'?x.g.slice(0,MAX_G):'Diğer',u:x.u,e:typeof x.e==='string'?x.e.slice(0,4):'📻',c:typeof x.c==='string'&&/^#[0-9a-f]{6}$/i.test(x.c)?x.c:COLORS[0]})):[];
+  ch=Array.isArray(rCh)?rCh.filter(x=>x&&typeof x==='object'&&typeof x.id==='string'&&x.id&&typeof x.n==='string'&&x.n.trim()&&typeof x.u==='string'&&isUrl(x.u)).map(x=>({id:x.id,n:String(x.n).slice(0,MAX_N),g:typeof x.g==='string'?x.g.slice(0,MAX_G):'Diğer',u:x.u,e:typeof x.e==='string'?x.e.slice(0,4):'📻',c:typeof x.c==='string'&&/^#[0-9a-f]{6}$/i.test(x.c)?x.c:COLORS[0],img:typeof x.img==='string'&&isUrl(x.img)?x.img:''})):[];
   const ids=new Set(ch.map(x=>x.id));
   fv=Array.isArray(rFv)?[...new Set(rFv.filter(f=>typeof f==='string'&&ids.has(f)))]:[];
   const seen=new Set();
@@ -651,8 +662,11 @@ function setupMS(){
 }
 function updateMeta(s){
   if(!('mediaSession' in navigator))return;
+  const artwork=[];
+  if(s.img){artwork.push({src:s.img,sizes:'256x256',type:'image/png'});}
   const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="80" fill="${esc(s.c||'#7c6cf0')}"/><text x="256" y="340" font-size="240" text-anchor="middle">${esc(s.e)}</text></svg>`;
-  try{navigator.mediaSession.metadata=new MediaMetadata({title:s.n,artist:'Canlı Yayın',album:s.g||'TürkRadyo',artwork:[{src:'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg),sizes:'512x512',type:'image/svg+xml'}]});}catch{}
+  artwork.push({src:'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg),sizes:'512x512',type:'image/svg+xml'});
+  try{navigator.mediaSession.metadata=new MediaMetadata({title:s.n,artist:'Canlı Yayın',album:s.g||'TürkRadyo',artwork});}catch{}
   navigator.mediaSession.playbackState='playing';
 }
 
@@ -676,9 +690,15 @@ function play(id){
   const s=ch.find(x=>x.id===id);if(!s)return;
   S.cur=s;S.retries=0;IM._uStop=false;S.should=true;IM.setUStop(false);
   g('mplay').classList.add('s');g('scr').classList.add('mp-on');
-  g('mIco').textContent=s.e;g('mIco').style.background=s.c||'var(--ac)';
+  // Mini player icon
+  g('mIco').innerHTML='';g('mIco').style.background=s.c||'var(--ac)';
+  if(s.img){const mi=document.createElement('img');mi.src=s.img;mi.alt='';mi.style.cssText='width:100%;height:100%;object-fit:cover;border-radius:inherit;';mi.onerror=function(){this.replaceWith(document.createTextNode(s.e));};g('mIco').appendChild(mi);}
+  else{g('mIco').textContent=s.e;}
   g('mName').textContent=s.n;
-  g('fpArt').textContent=s.e;g('fpArt').style.background=`linear-gradient(135deg,${s.c||'var(--ac)'},${darken(s.c||'#7c6cf0')})`;
+  // Full player art
+  g('fpArt').innerHTML='';g('fpArt').style.background=`linear-gradient(135deg,${s.c||'var(--ac)'},${darken(s.c||'#7c6cf0')})`;
+  if(s.img){const fi=document.createElement('img');fi.src=s.img;fi.alt='';fi.style.cssText='width:100%;height:100%;object-fit:cover;border-radius:inherit;';fi.onerror=function(){this.replaceWith(document.createTextNode(s.e));};g('fpArt').appendChild(fi);}
+  else{g('fpArt').textContent=s.e;}
   // Dynamic full player bg
   g('fpOrb1').style.background=s.c||'var(--ac)';
   g('fpOrb2').style.background=darken(s.c||'#7c6cf0');
@@ -707,11 +727,17 @@ function updateFavBtn(){if(S.cur)g('btnFpFav').textContent=fv.includes(S.cur.id)
 function addHist(s){rc=rc.filter(r=>r.id!==s.id);rc.unshift({id:s.id,t:Date.now()});if(rc.length>MAX_H)rc=rc.slice(0,MAX_H);dataSave();}
 
 /* ── CARD ── */
-function makeCard(s,idx){
+function makeCard(s,idx,showDrag){
   const isOn=S.cur?.id===s.id,isFav=fv.includes(s.id);
   const div=document.createElement('div');div.className='card'+(isOn?' on':'');div.dataset.action='play';div.dataset.id=s.id;
+  if(showDrag){
+    const dh=document.createElement('div');dh.className='drag-handle';dh.textContent='⠿';dh.dataset.action='drag';
+    div.draggable=true;div.appendChild(dh);
+  }
   const ico=document.createElement('div');ico.className='cico';ico.style.background=s.c||'var(--ac)';
-  if(isOn&&S.playing){ico.innerHTML='<div class="ceq"><i></i><i></i><i></i><i></i></div>';}else{ico.textContent=s.e;}
+  if(isOn&&S.playing){ico.innerHTML='<div class="ceq"><i></i><i></i><i></i><i></i></div>';}
+  else if(s.img){const img=document.createElement('img');img.src=s.img;img.alt='';img.style.cssText='width:100%;height:100%;object-fit:cover;border-radius:inherit;';img.onerror=function(){this.replaceWith(document.createTextNode(s.e));};ico.appendChild(img);}
+  else{ico.textContent=s.e;}
   const inf=document.createElement('div');inf.className='cinf';
   const nm=document.createElement('div');nm.className='cnam';nm.textContent=s.n;
   const gn=document.createElement('div');gn.className='cgen';
@@ -748,11 +774,72 @@ function renderAll(){
 }
 function renderFavs(){
   const w=g('favList');w.innerHTML='';
-  const list=getFiltered(ch.filter(x=>fv.includes(x.id)));
-  if(!ch.filter(x=>fv.includes(x.id)).length){w.innerHTML=`<div class="empty"><span class="empty-ic">💜</span><h3>Favori yok</h3><p>Kanallarım'dan ❤️ ile ekleyin<br>veya ➕ ile yeni radyo arayın</p><button class="empty-btn" id="eaF">📻 Radyo Ekle</button></div>`;g('eaF')?.addEventListener('click',openMod);return;}
+  const favStations=ch.filter(x=>fv.includes(x.id));
+  // Sort by fv order
+  favStations.sort((a,b)=>fv.indexOf(a.id)-fv.indexOf(b.id));
+  const list=getFiltered(favStations);
+  if(!favStations.length){w.innerHTML=`<div class="empty"><span class="empty-ic">💜</span><h3>Favori yok</h3><p>Kanallarım'dan ❤️ ile ekleyin<br>veya ➕ ile yeni radyo arayın</p><button class="empty-btn" id="eaF">📻 Radyo Ekle</button></div>`;g('eaF')?.addEventListener('click',openMod);return;}
   if(!list.length){w.innerHTML=`<div class="empty"><span class="empty-ic">🔍</span><h3>Filtre sonucu boş</h3><p>Farklı bir kategori deneyin</p></div>`;return;}
+  w.classList.add('fav-mode');
   const ttl=document.createElement('div');ttl.className='ttl';ttl.innerHTML=`⭐ Favorilerim <span class="count-badge">${list.length}</span>`;w.appendChild(ttl);
-  const f=document.createDocumentFragment();list.forEach((s,i)=>f.appendChild(makeCard(s,i)));w.appendChild(f);attachDel(w);
+  const f=document.createDocumentFragment();list.forEach((s,i)=>f.appendChild(makeCard(s,i,true)));w.appendChild(f);attachDel(w);initFavDrag(w);
+}
+/* ── DRAG & DROP (favoriler) ── */
+function initFavDrag(container){
+  let dragId=null;
+  container.addEventListener('dragstart',e=>{
+    const card=e.target.closest('.card');if(!card)return;
+    dragId=card.dataset.id;card.classList.add('dragging');
+    e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragId);
+  });
+  container.addEventListener('dragend',e=>{
+    const card=e.target.closest('.card');if(card)card.classList.remove('dragging');
+    container.querySelectorAll('.drag-over').forEach(c=>c.classList.remove('drag-over'));dragId=null;
+  });
+  container.addEventListener('dragover',e=>{
+    e.preventDefault();e.dataTransfer.dropEffect='move';
+    const card=e.target.closest('.card');
+    container.querySelectorAll('.drag-over').forEach(c=>c.classList.remove('drag-over'));
+    if(card&&card.dataset.id!==dragId)card.classList.add('drag-over');
+  });
+  container.addEventListener('drop',e=>{
+    e.preventDefault();
+    const card=e.target.closest('.card');if(!card||!dragId)return;
+    const targetId=card.dataset.id;if(targetId===dragId)return;
+    const fromIdx=fv.indexOf(dragId),toIdx=fv.indexOf(targetId);
+    if(fromIdx<0||toIdx<0)return;
+    fv.splice(fromIdx,1);fv.splice(toIdx,0,dragId);
+    dataSave();renderFavs();toast('✅ Sıralama güncellendi');
+  });
+  // Touch support for mobile
+  let touchDragId=null,touchClone=null,touchStartY=0,touchMoved=false;
+  container.addEventListener('touchstart',e=>{
+    const handle=e.target.closest('.drag-handle');if(!handle)return;
+    const card=handle.closest('.card');if(!card)return;
+    touchDragId=card.dataset.id;touchStartY=e.touches[0].clientY;touchMoved=false;
+    card.classList.add('dragging');
+  },{passive:true});
+  container.addEventListener('touchmove',e=>{
+    if(!touchDragId)return;touchMoved=true;
+    const touch=e.touches[0];
+    const el=document.elementFromPoint(touch.clientX,touch.clientY);
+    container.querySelectorAll('.drag-over').forEach(c=>c.classList.remove('drag-over'));
+    const card=el?.closest('.card');
+    if(card&&card.dataset.id!==touchDragId)card.classList.add('drag-over');
+    if(Math.abs(touch.clientY-touchStartY)>10)e.preventDefault();
+  },{passive:false});
+  container.addEventListener('touchend',e=>{
+    if(!touchDragId)return;
+    container.querySelectorAll('.dragging').forEach(c=>c.classList.remove('dragging'));
+    const overCard=container.querySelector('.drag-over');
+    if(overCard&&touchMoved){
+      const targetId=overCard.dataset.id;
+      const fromIdx=fv.indexOf(touchDragId),toIdx=fv.indexOf(targetId);
+      if(fromIdx>=0&&toIdx>=0){fv.splice(fromIdx,1);fv.splice(toIdx,0,touchDragId);dataSave();renderFavs();toast('✅ Sıralama güncellendi');}
+    }
+    container.querySelectorAll('.drag-over').forEach(c=>c.classList.remove('drag-over'));
+    touchDragId=null;touchMoved=false;
+  });
 }
 function renderRecent(){
   const w=g('recList');w.innerHTML='';const chMap=new Map(ch.map(x=>[x.id,x]));const valid=rc.filter(r=>chMap.has(r.id));
@@ -829,9 +916,9 @@ function setSleep(min){
 }
 
 /* ── ADD/DEL ── */
-function addCh(name,url,genre,emoji){
+function addCh(name,url,genre,emoji,imgUrl){
   if(!isUrl(url)){toast('⚠️ Geçersiz URL');return false;}if(ch.find(x=>x.u===url)){toast('⚠️ Bu kanal zaten ekli');return false;}
-  ch.push({id:mkId(),n:name.slice(0,MAX_N),g:(genre||'Diğer').slice(0,MAX_G),u:url,e:(emoji||'📻').slice(0,4),c:COLORS[Math.floor(Math.random()*COLORS.length)]});
+  ch.push({id:mkId(),n:name.slice(0,MAX_N),g:(genre||'Diğer').slice(0,MAX_G),u:url,e:(emoji||'📻').slice(0,4),c:COLORS[Math.floor(Math.random()*COLORS.length)],img:(imgUrl&&isUrl(imgUrl))?imgUrl:''});
   dataSave();renderCards();renderSettings();updateSearchVisibility();toast('✅ '+name);return true;
 }
 async function delCh(id){
@@ -850,12 +937,12 @@ function updateSearchVisibility(){
 
 /* ── MODAL ── */
 function openMod(){g('addMod').classList.add('s');}
-function closeMod(){g('addMod').classList.remove('s');['rTR','rGL','rTG'].forEach(id=>g(id).innerHTML='');g('inN').value='';g('inU').value='';g('inE').value='📻';g('fgN').classList.remove('bad');g('fgU').classList.remove('bad');}
+function closeMod(){g('addMod').classList.remove('s');['rTR','rGL','rTG'].forEach(id=>g(id).innerHTML='');g('inN').value='';g('inU').value='';g('inE').value='📻';g('inImg').value='';g('fgN').classList.remove('bad');g('fgU').classList.remove('bad');}
 function doManualAdd(){
   const name=g('inN').value.trim(),url=g('inU').value.trim();let ok=true;
   if(!name){g('fgN').classList.add('bad');ok=false;}else g('fgN').classList.remove('bad');
   if(!isUrl(url)){g('fgU').classList.add('bad');ok=false;}else g('fgU').classList.remove('bad');
-  if(!ok)return;if(addCh(name,url,g('inC').value,g('inE').value||'📻'))closeMod();
+  if(!ok)return;if(addCh(name,url,g('inC').value,g('inE').value||'📻',g('inImg').value.trim()))closeMod();
 }
 
 /* ── SEARCH API ── */
@@ -886,6 +973,7 @@ function renderSR(data,container,key){
   data.forEach((x,i)=>{
     const url=x.url_resolved||x.url,added=ch.some(a=>a.u===url);
     const item=document.createElement('div');item.className='sr-item';
+    if(x.favicon&&isUrl(x.favicon)){const sImg=document.createElement('img');sImg.src=x.favicon;sImg.alt='';sImg.style.cssText='width:28px;height:28px;border-radius:6px;object-fit:cover;flex-shrink:0;background:var(--bg3);';sImg.onerror=function(){this.style.display='none';};item.appendChild(sImg);}
     const inf=document.createElement('div');inf.className='sr-inf';
     const nm=document.createElement('div');nm.className='sr-nm';nm.textContent=x.name;
     const tg=document.createElement('div');tg.className='sr-tg';tg.textContent=`${x.country||''} · ${x.tags?x.tags.split(',').slice(0,2).join(', '):'—'} · ${x.bitrate||'?'} kbps`;
@@ -902,12 +990,13 @@ function pickSR(cacheKey,i,container,origKey){
   const x=data[i],url=x.url_resolved||x.url;if(!isUrl(url)){toast('⚠️ Geçersiz URL');return;}
   const t=(x.tags||'').toLowerCase();let genre='Diğer';
   if(t.includes('pop'))genre='Pop';else if(t.includes('rock'))genre='Rock';else if(/jazz/.test(t))genre='Caz';else if(/news|haber|talk/.test(t))genre='Haber';else if(/türk|turkish|folk/.test(t))genre='THM';else if(/islam|quran|dini/.test(t))genre='Dini';else if(/electro|dance|edm|house|techno/.test(t))genre='Elektronik';else if(/classic/.test(t))genre='TSM';else if(/sport/.test(t))genre='Spor';else if(/child|kid|çocuk/.test(t))genre='Çocuk';
-  if(addCh(x.name,url,genre,'📻')){const fresh=_sr.get(origKey);if(fresh)renderSR(fresh,container,origKey);}
+  const favicon=(x.favicon&&isUrl(x.favicon))?x.favicon:'';
+  if(addCh(x.name,url,genre,'📻',favicon)){const fresh=_sr.get(origKey);if(fresh)renderSR(fresh,container,origKey);}
 }
 
 /* ── EXPORT/IMPORT/RESET ── */
 function doExport(){
-  const blob=new Blob([JSON.stringify({version:'10.0',ch,fv,rc},null,2)],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({version:'11.0',ch,fv,rc},null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='turkradyo_yedek.json';a.click();URL.revokeObjectURL(url);toast('💾 Yedek indirildi');
 }
 function doImport(e){
@@ -919,7 +1008,7 @@ function doImport(e){
       let added=0;
       d.ch.forEach(x=>{
         if(!x||typeof x.id!=='string'||!x.id)return;if(typeof x.n!=='string'||!x.n.trim())return;if(typeof x.u!=='string'||!isUrl(x.u))return;if(ch.some(c=>c.u===x.u))return;
-        ch.push({id:mkId(),n:String(x.n).slice(0,MAX_N),g:typeof x.g==='string'?x.g.slice(0,MAX_G):'Diğer',u:x.u,e:typeof x.e==='string'?x.e.slice(0,4):'📻',c:typeof x.c==='string'&&/^#[0-9a-f]{6}$/i.test(x.c)?x.c:COLORS[Math.floor(Math.random()*COLORS.length)]});added++;
+        ch.push({id:mkId(),n:String(x.n).slice(0,MAX_N),g:typeof x.g==='string'?x.g.slice(0,MAX_G):'Diğer',u:x.u,e:typeof x.e==='string'?x.e.slice(0,4):'📻',c:typeof x.c==='string'&&/^#[0-9a-f]{6}$/i.test(x.c)?x.c:COLORS[Math.floor(Math.random()*COLORS.length)],img:typeof x.img==='string'&&isUrl(x.img)?x.img:''});added++;
       });
       const ids=new Set(ch.map(x=>x.id));
       if(Array.isArray(d.fv))d.fv.forEach(f=>{if(typeof f==='string'&&ids.has(f)&&!fv.includes(f))fv.push(f);});
@@ -937,7 +1026,7 @@ async function doReset(){
 
 /* ═══ INIT ═══ */
 function init(){
-  if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister()));caches.keys().then(ks=>ks.forEach(k=>caches.delete(k)));}
+  if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
 
   dataLoad();loadIntOpts();renderChips();renderCards();renderSettings();
 
