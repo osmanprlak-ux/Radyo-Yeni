@@ -1,6 +1,6 @@
-const CACHE='turkradyo-v10.1';
+const CACHE='turkradyo-v12.0';
 const PRECACHE=['/','index.html'];
-const FONT_CACHE='turkradyo-fonts-v1';
+const FONT_CACHE='turkradyo-fonts-v2';
 
 self.addEventListener('install',e=>{
   e.waitUntil(
@@ -21,7 +21,7 @@ self.addEventListener('fetch',e=>{
 
   // Never cache audio streams or API calls
   if(url.hostname.includes('radio-browser.info')||
-     e.request.url.match(/\.(mp3|aac|m3u8|ogg|opus)(\?|$)/i)||
+     e.request.url.match(/\.(mp3|aac|m3u8|ogg|opus|flac|wav)(\?|$)/i)||
      e.request.headers.get('range')){
     return;
   }
@@ -51,7 +51,7 @@ self.addEventListener('fetch',e=>{
           caches.open(CACHE).then(c=>c.put(e.request,clone));
         }
         return res;
-      }).catch(()=>caches.match(e.request))
+      }).catch(()=>caches.match(e.request).then(r=>r||new Response('<h1>Çevrimdışı</h1><p>İnternet bağlantınızı kontrol edin.</p>',{headers:{'Content-Type':'text/html;charset=utf-8'}})))
     );
   }
 });
