@@ -345,7 +345,7 @@ background-repeat:repeat;background-size:128px 128px}
 .set-t{font-family:var(--font-display);font-size:9px;font-weight:800;color:var(--tx3);text-transform:uppercase;letter-spacing:2px;padding:12px 0 8px}
 .set-row{display:flex;align-items:center;gap:12px;padding:13px 14px;background:var(--cd);border:1px solid var(--bd);border-radius:var(--radius);margin-bottom:6px;cursor:pointer;transition:all .2s}
 .set-row:active{background:var(--cd2);transform:scale(.98)}
-.set-ic{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.set-ic{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;overflow:hidden}
 .set-lb{flex:1}
 .set-lb h4{font-size:12.5px;font-weight:700;letter-spacing:-.1px}
 .set-lb p{font-size:9px;color:var(--tx3);margin-top:2px}
@@ -541,7 +541,7 @@ background-repeat:repeat;background-size:128px 128px}
       </div>
       <div class="fp-int-body" id="fpIntBody">
         <div class="int-row"><div class="int-lbl">Telefon aramasında durdur<small>Arama sonrası otomatik devam eder</small></div><label class="sw"><input type="checkbox" id="swCall" checked><span class="sw-sl"></span></label></div>
-        <div class="int-row"><div class="int-lbl">Bildirimde sesi kıs<small>Kısa kesintide %30'a düşür</small></div><label class="sw"><input type="checkbox" id="swNotif" checked><span class="sw-sl"></span></label></div>
+        <div class="int-row"><div class="int-lbl">Bildirimde sesi kıs<small>Kısa kesintide sesi düşür</small></div><label class="sw"><input type="checkbox" id="swNotif" checked><span class="sw-sl"></span></label></div>
         <div class="int-row"><div class="int-lbl">Arka plana alınınca kıs<small>Uygulama arka planda iken</small></div><label class="sw"><input type="checkbox" id="swBg" checked><span class="sw-sl"></span></label></div>
         <div class="int-row"><div class="int-lbl">Devam gecikme süresi<small>Kesinti sonrası bekleme</small></div><input type="range" class="rng" id="resumeDelay" min="0" max="3000" step="250" value="800" style="width:90px;flex-shrink:0"><span class="int-val" id="resumeDelayVal">0.8s</span></div>
         <div class="int-row"><div class="int-lbl">Bildirim ses seviyesi<small>Kesinti anındaki ses (0–50%)</small></div><input type="range" class="rng" id="notifVol" min="0" max="50" step="5" value="20" style="width:90px;flex-shrink:0"><span class="int-val" id="notifVolVal">20%</span></div>
@@ -773,7 +773,7 @@ function setupMS(){
 function updateMeta(s){
   if(!('mediaSession' in navigator))return;
   const artwork=[];
-  if(s.img){artwork.push({src:s.img,sizes:'256x256',type:'image/png'});}
+  if(s.img){artwork.push({src:s.img,sizes:'256x256'});}
   const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="80" fill="${esc(s.c||'#7c6cf0')}"/><text x="256" y="340" font-size="240" text-anchor="middle">${esc(s.e)}</text></svg>`;
   artwork.push({src:'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg),sizes:'512x512',type:'image/svg+xml'});
   try{navigator.mediaSession.metadata=new MediaMetadata({title:s.n,artist:'Canlı Yayın',album:s.g||'TürkRadyo',artwork});}catch{}
@@ -803,7 +803,7 @@ function setStatus(t){
 /* ── PLAY ── */
 function play(id){
   const s=ch.find(x=>x.id===id);if(!s)return;
-  S.cur=s;S.retries=0;IM._uStop=false;S.should=true;IM.setUStop(false);
+  S.cur=s;S.retries=0;S.should=true;IM.setUStop(false);
   g('mplay').classList.add('s');g('scr').classList.add('mp-on');
   // Mini player icon
   const mIco=g('mIco');mIco.innerHTML='';mIco.style.background=s.c||'var(--ac)';
@@ -987,7 +987,7 @@ function initFavDrag(container){
     fv.splice(fromIdx,1);fv.splice(toIdx,0,dragId);
     dataSave();renderFavs();toast('Sıralama güncellendi','ok');
   });
-  let touchDragId=null,touchClone=null,touchStartY=0,touchMoved=false;
+  let touchDragId=null,touchStartY=0,touchMoved=false;
   container.addEventListener('touchstart',e=>{
     const handle=e.target.closest('.drag-handle');if(!handle)return;
     const card=handle.closest('.card');if(!card)return;
@@ -1090,7 +1090,7 @@ function closeFP(){g('fplay').classList.remove('s');}
 let _slT=null;
 function setSleep(min){
   if(_slT){clearInterval(_slT);_slT=null;}const lbl=g('sleepLbl');
-  if(min==0){lbl.classList.remove('s');return;}
+  if(min===0){lbl.classList.remove('s');return;}
   const end=Date.now()+min*60000;lbl.classList.add('s');
   _slT=setInterval(()=>{const l=end-Date.now();if(l<=0){userPause();clearInterval(_slT);_slT=null;lbl.classList.remove('s');g('sleepSel').value='0';toast('Uyku zamanlayıcısı: durdu');return;}lbl.textContent=`⏰ ${Math.floor(l/60000)}:${Math.floor((l%60000)/1000).toString().padStart(2,'0')}`;},1000);
   toast(`⏰ ${min} dk sonra durur`);
@@ -1178,7 +1178,7 @@ function pickSR(cacheKey,i,container,origKey){
 /* ── EXPORT/IMPORT/RESET ── */
 function doExport(){
   const blob=new Blob([JSON.stringify({version:'12.0',ch,fv,rc},null,2)],{type:'application/json'});
-  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='turkradyo_yedek.json';a.click();URL.revokeObjectURL(url);toast('Yedek indirildi','ok');
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='turkradyo_yedek.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Yedek indirildi','ok');
 }
 function doImport(e){
   const f=e.target.files[0];if(!f)return;
