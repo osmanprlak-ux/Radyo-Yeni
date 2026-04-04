@@ -722,11 +722,21 @@ const IM={
   initAudioContext(){
     try{this._actx=new(window.AudioContext||window.webkitAudioContext)();
     this._actx.addEventListener('statechange',()=>{
-      if(this._actx.state==='suspended'&&!this._actxSuspended){this._actxSuspended=true;this._actxSuspendTime=Date.now();this.interrupt('notif');}
-      else if(this._actx.state==='running'&&this._actxSuspended){this._actxSuspended=false;const dur=Date.now()-(this._actxSuspendTime||0);if(dur>=2500&&this._type==='notif'){this._type='call';g('itrTxt').textContent='📞 Arama bitti';}this.resume();}
-      else if(this._actx.state==='interrupted'){
+      if(this._actx.state==='interrupted'){
+        // Real iOS audio interruption (phone call, Siri, etc.)
         this._actxSuspended=true;this._actxSuspendTime=Date.now();
         if(!this._interrupted)this.interrupt('call');
+      }
+      else if(this._actx.state==='suspended'&&!this._actxSuspended){
+        // Only interrupt if not just screen lock
+        this._actxSuspended=true;this._actxSuspendTime=Date.now();
+        if(!document.hidden)this.interrupt('notif');
+      }
+      else if(this._actx.state==='running'&&this._actxSuspended){
+        this._actxSuspended=false;
+        const dur=Date.now()-(this._actxSuspendTime||0);
+        if(dur>=2500&&this._type==='notif'){this._type='call';g('itrTxt').textContent='📞 Arama bitti';}
+        this.resume();
       }
     });}catch(e){}
   },
@@ -750,10 +760,10 @@ const IOS={
     a.addEventListener('stalled',()=>{if(S.cur&&S.should&&!IM._uStop)setTimeout(()=>{if(S.cur&&S.should&&(a.paused||a.readyState<2))this.reload();},4000);});
     a.addEventListener('ended',()=>{if(S.cur&&S.should&&!IM._uStop)this.reload();});
     window.addEventListener('pageshow',e=>{if(e.persisted){IM.resumeAudioContext();if(S.cur&&S.should&&a.paused&&!IM._uStop)this.resume(600);}});
-    document.addEventListener('visibilitychange',()=>{if(document.hidden){IM.interrupt('bg');this._stopRecovery();}else{IM.resumeAudioContext();if(IM._interrupted&&IM._type==='bg')IM.resume();else if(S.cur&&S.should&&a.paused&&!IM._uStop)this.resume(800);this._startRecovery();}});
-    window.addEventListener('blur',()=>{if(!document.hidden)IM.interrupt('notif');});
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden){IM.resumeAudioContext();if(IM._interrupted&&IM._type==='bg')IM.resume();else if(S.cur&&S.should&&a.paused&&!IM._uStop)this.resume(800);this._startRecovery();if(S.cur&&S.playing&&'mediaSession' in navigator)updateMeta(S.cur);}else{this._stopRecovery();}});
+    window.addEventListener('blur',()=>{if(!document.hidden&&document.hasFocus&&!document.hasFocus())IM.interrupt('notif');});
     window.addEventListener('focus',()=>{IM.resumeAudioContext();if(IM._interrupted&&IM._type==='notif')IM.resume();else if(S.cur&&S.should&&a.paused&&!IM._uStop)this.resume(600);});
-    a.addEventListener('pause',()=>{if(!IM._uStop&&S.should&&!IM._interrupted){setTimeout(()=>{if(a.paused&&S.should&&!IM._uStop&&!IM._interrupted)IM.interrupt('call');},300);}});
+    a.addEventListener('pause',()=>{if(!IM._uStop&&S.should&&!IM._interrupted&&!document.hidden){setTimeout(()=>{if(a.paused&&S.should&&!IM._uStop&&!IM._interrupted&&!document.hidden)IM.interrupt('call');},500);}});
     if(navigator.mediaDevices?.addEventListener)navigator.mediaDevices.addEventListener('devicechange',()=>{if(S.cur&&S.should&&a.paused&&!IM._uStop)this.resume(1200);});
   },
   _startRecovery(){if(this._recoveryTimer)return;this._recoveryTimer=setInterval(()=>{if(S.cur&&S.should&&this.a.paused&&!IM._uStop&&!IM._interrupted&&!this._rel)this.resume(0);},12000);},
@@ -775,38 +785,46 @@ function setupMS(){
   // Prevent iOS seek bar from appearing
   try{navigator.mediaSession.setActionHandler('seekto',null);}catch{}
 }
+let _metaArtCache=new Map();
 function updateMeta(s){
   if(!('mediaSession' in navigator))return;
   const artwork=[];
-  // iOS lock screen needs multiple sizes for best quality
   if(s.img){
-    ['96x96','128x128','192x192','256x256','384x384','512x512'].forEach(sz=>{
-      artwork.push({src:s.img,sizes:sz,type:'image/png'});
-    });
+    // Use multiple sizes for iOS lock screen
+    artwork.push({src:s.img,sizes:'96x96',type:'image/png'});
+    artwork.push({src:s.img,sizes:'128x128',type:'image/png'});
+    artwork.push({src:s.img,sizes:'192x192',type:'image/png'});
+    artwork.push({src:s.img,sizes:'256x256',type:'image/png'});
+    artwork.push({src:s.img,sizes:'512x512',type:'image/png'});
   }
-  // Generate canvas-based PNG fallback (iOS doesn't render SVG in NowPlaying)
-  try{
-    const cvs=document.createElement('canvas');cvs.width=512;cvs.height=512;
-    const ctx=cvs.getContext('2d');
-    const grd=ctx.createLinearGradient(0,0,512,512);grd.addColorStop(0,s.c||'#7c6cf0');grd.addColorStop(1,darken(s.c||'#7c6cf0'));
-    ctx.fillStyle=grd;ctx.beginPath();ctx.roundRect(0,0,512,512,80);ctx.fill();
-    ctx.font='240px serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(s.e,256,270);
-    artwork.push({src:cvs.toDataURL('image/png'),sizes:'512x512',type:'image/png'});
-  }catch{
-    const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${esc(s.c||'#7c6cf0')}"/><stop offset="100%" stop-color="${esc(darken(s.c||'#7c6cf0'))}"/></linearGradient></defs><rect width="512" height="512" rx="80" fill="url(#bg)"/><text x="256" y="340" font-size="240" text-anchor="middle">${esc(s.e)}</text></svg>`;
-    artwork.push({src:'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg),sizes:'512x512',type:'image/svg+xml'});
+  // Canvas fallback - cache per station to avoid lag
+  const cacheKey=s.id+'_'+s.c+'_'+s.e;
+  if(_metaArtCache.has(cacheKey)){
+    artwork.push({src:_metaArtCache.get(cacheKey),sizes:'512x512',type:'image/png'});
+  }else{
+    try{
+      const cvs=document.createElement('canvas');cvs.width=512;cvs.height=512;
+      const ctx=cvs.getContext('2d');
+      const grd=ctx.createLinearGradient(0,0,512,512);grd.addColorStop(0,s.c||'#7c6cf0');grd.addColorStop(1,darken(s.c||'#7c6cf0'));
+      ctx.fillStyle=grd;ctx.beginPath();ctx.roundRect(0,0,512,512,80);ctx.fill();
+      ctx.font='240px serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(s.e,256,270);
+      const dataUrl=cvs.toDataURL('image/png');
+      _metaArtCache.set(cacheKey,dataUrl);
+      if(_metaArtCache.size>20){const first=_metaArtCache.keys().next().value;_metaArtCache.delete(first);}
+      artwork.push({src:dataUrl,sizes:'512x512',type:'image/png'});
+    }catch{}
   }
   try{
     navigator.mediaSession.metadata=new MediaMetadata({
       title:s.n,
-      artist:(s.g&&s.g!=='Diğer')?s.g+' · Canlı Yayın':'Canlı Yayın',
+      artist:(s.g&&s.g!=='Diğer')?s.g:'Canlı Radyo',
       album:'TürkRadyo',
       artwork
     });
   }catch{}
   navigator.mediaSession.playbackState='playing';
-  // Live radio position state (prevents seek bar on iOS lock screen)
-  try{navigator.mediaSession.setPositionState({duration:Infinity,playbackRate:1,position:0});}catch{}
+  // Clear position state for live radio (no seek bar, no duration)
+  try{navigator.mediaSession.setPositionState();}catch{}
 }
 
 /* ── PLAY STATE ── */
@@ -815,11 +833,7 @@ const aud=g('aud');
 
 function setPlaying(v){
   S.playing=v;S.should=v;updatePlayUI();
-  if('mediaSession' in navigator){
-    navigator.mediaSession.playbackState=v?'playing':'paused';
-    // Re-push metadata on play to ensure iOS lock screen updates
-    if(v&&S.cur)updateMeta(S.cur);
-  }
+  if('mediaSession' in navigator)navigator.mediaSession.playbackState=v?'playing':'paused';
   g('ambient').classList.toggle('playing',v);
   g('mplay').classList.toggle('playing',v);
   g('fplay').classList.toggle('playing',v);
@@ -1381,21 +1395,12 @@ function init(){
     document.removeEventListener('touchstart',u);
   },{once:true});
 
-  // iOS visibility change - re-push metadata when returning from lock screen
-  document.addEventListener('visibilitychange',()=>{
-    if(!document.hidden&&S.cur&&S.playing&&'mediaSession' in navigator){
-      updateMeta(S.cur);
-    }
-  });
-
   setTimeout(()=>g('spl').classList.add('h'),1800);
 
   /* audio events */
   aud.addEventListener('playing',()=>{setPlaying(true);S.retries=0;IM.setUStop(false);setStatus('live');renderCards();IOS._startRecovery();});
   aud.addEventListener('pause',()=>{S.playing=false;updatePlayUI();g('ambient').classList.remove('playing');g('mplay').classList.remove('playing');g('fplay').classList.remove('playing');if('mediaSession' in navigator)navigator.mediaSession.playbackState=IM._uStop?'paused':'none';});
   aud.addEventListener('waiting',()=>setStatus('load'));
-  // iOS stalled recovery - auto-reconnect when stream stalls
-  aud.addEventListener('stalled',()=>{if(S.cur&&S.should&&!IM._uStop){setStatus('retry');setTimeout(()=>{if(S.cur&&S.should&&!IM._uStop){aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;aud.play().catch(()=>{});}},1500);}});
   aud.addEventListener('error',()=>{
     if(S.cur&&S.should&&!IM._uStop&&S.retries<4){S.retries++;toast(`Deneniyor (${S.retries}/4)...`,'warn');setStatus('retry');setTimeout(()=>{if(S.cur&&S.should){aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;aud.play().catch(()=>{});}},2000*S.retries);}
     else if(S.retries>=4){toast('Bağlantı kurulamadı','err');S.should=false;S.playing=false;updatePlayUI();}
