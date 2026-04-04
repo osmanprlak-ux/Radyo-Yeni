@@ -10,7 +10,8 @@
 <meta name="description" content="Türkiye'nin en iyi canlı radyo dinleme uygulaması. Yüzlerce radyo kanalını ücretsiz dinleyin.">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icons/icon.svg">
+<link rel="apple-touch-icon" href="icons/icon.svg" sizes="any">
+<link rel="apple-touch-icon" id="ati180" href="icons/icon.svg" sizes="180x180">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://de1.api.radio-browser.info">
@@ -764,21 +765,48 @@ const IOS={
 /* ── MEDIA SESSION ── */
 function setupMS(){
   if(!('mediaSession' in navigator))return;
-  navigator.mediaSession.setActionHandler('play',()=>{if(S.cur){IM.setUStop(false);S.should=true;aud.play().catch(()=>IOS.reload());}});
-  navigator.mediaSession.setActionHandler('pause',()=>{if(S.cur)userPause();});
-  navigator.mediaSession.setActionHandler('previoustrack',prevSt);navigator.mediaSession.setActionHandler('nexttrack',nextSt);
+  navigator.mediaSession.setActionHandler('play',()=>{if(S.cur){IM.setUStop(false);S.should=true;aud.play().catch(()=>IOS.reload());navigator.mediaSession.playbackState='playing';}});
+  navigator.mediaSession.setActionHandler('pause',()=>{if(S.cur){userPause();navigator.mediaSession.playbackState='paused';}});
+  navigator.mediaSession.setActionHandler('previoustrack',prevSt);
+  navigator.mediaSession.setActionHandler('nexttrack',nextSt);
   try{navigator.mediaSession.setActionHandler('seekbackward',prevSt);}catch{}
   try{navigator.mediaSession.setActionHandler('seekforward',nextSt);}catch{}
-  try{navigator.mediaSession.setActionHandler('stop',()=>{if(S.cur)userPause();});}catch{}
+  try{navigator.mediaSession.setActionHandler('stop',()=>{if(S.cur){userPause();navigator.mediaSession.playbackState='none';}});}catch{}
+  // Prevent iOS seek bar from appearing
+  try{navigator.mediaSession.setActionHandler('seekto',null);}catch{}
 }
 function updateMeta(s){
   if(!('mediaSession' in navigator))return;
   const artwork=[];
-  if(s.img){artwork.push({src:s.img,sizes:'256x256'});}
-  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="80" fill="${esc(s.c||'#7c6cf0')}"/><text x="256" y="340" font-size="240" text-anchor="middle">${esc(s.e)}</text></svg>`;
-  artwork.push({src:'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg),sizes:'512x512',type:'image/svg+xml'});
-  try{navigator.mediaSession.metadata=new MediaMetadata({title:s.n,artist:'Canlı Yayın',album:s.g||'TürkRadyo',artwork});}catch{}
+  // iOS lock screen needs multiple sizes for best quality
+  if(s.img){
+    ['96x96','128x128','192x192','256x256','384x384','512x512'].forEach(sz=>{
+      artwork.push({src:s.img,sizes:sz,type:'image/png'});
+    });
+  }
+  // Generate canvas-based PNG fallback (iOS doesn't render SVG in NowPlaying)
+  try{
+    const cvs=document.createElement('canvas');cvs.width=512;cvs.height=512;
+    const ctx=cvs.getContext('2d');
+    const grd=ctx.createLinearGradient(0,0,512,512);grd.addColorStop(0,s.c||'#7c6cf0');grd.addColorStop(1,darken(s.c||'#7c6cf0'));
+    ctx.fillStyle=grd;ctx.beginPath();ctx.roundRect(0,0,512,512,80);ctx.fill();
+    ctx.font='240px serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(s.e,256,270);
+    artwork.push({src:cvs.toDataURL('image/png'),sizes:'512x512',type:'image/png'});
+  }catch{
+    const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${esc(s.c||'#7c6cf0')}"/><stop offset="100%" stop-color="${esc(darken(s.c||'#7c6cf0'))}"/></linearGradient></defs><rect width="512" height="512" rx="80" fill="url(#bg)"/><text x="256" y="340" font-size="240" text-anchor="middle">${esc(s.e)}</text></svg>`;
+    artwork.push({src:'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg),sizes:'512x512',type:'image/svg+xml'});
+  }
+  try{
+    navigator.mediaSession.metadata=new MediaMetadata({
+      title:s.n,
+      artist:(s.g&&s.g!=='Diğer')?s.g+' · Canlı Yayın':'Canlı Yayın',
+      album:'TürkRadyo',
+      artwork
+    });
+  }catch{}
   navigator.mediaSession.playbackState='playing';
+  // Live radio position state (prevents seek bar on iOS lock screen)
+  try{navigator.mediaSession.setPositionState({duration:Infinity,playbackRate:1,position:0});}catch{}
 }
 
 /* ── PLAY STATE ── */
@@ -787,7 +815,11 @@ const aud=g('aud');
 
 function setPlaying(v){
   S.playing=v;S.should=v;updatePlayUI();
-  if('mediaSession' in navigator)navigator.mediaSession.playbackState=v?'playing':'paused';
+  if('mediaSession' in navigator){
+    navigator.mediaSession.playbackState=v?'playing':'paused';
+    // Re-push metadata on play to ensure iOS lock screen updates
+    if(v&&S.cur)updateMeta(S.cur);
+  }
   g('ambient').classList.toggle('playing',v);
   g('mplay').classList.toggle('playing',v);
   g('fplay').classList.toggle('playing',v);
@@ -1332,8 +1364,29 @@ function init(){
 
   IM.init(aud);IOS.init(aud);setupMS();setupInstallPrompt();setupOfflineDetection();
 
-  // iOS audio unlock
-  document.addEventListener('touchstart',function u(){aud.play().then(()=>aud.pause()).catch(()=>{});document.removeEventListener('touchstart',u);},{once:true});
+  // Generate PNG apple-touch-icon for better iOS home screen support
+  try{
+    const cvs=document.createElement('canvas');cvs.width=180;cvs.height=180;
+    const ctx=cvs.getContext('2d');
+    const grd=ctx.createLinearGradient(0,0,180,180);grd.addColorStop(0,'#7c6cf0');grd.addColorStop(1,'#ff6b9d');
+    ctx.fillStyle=grd;ctx.beginPath();ctx.roundRect(0,0,180,180,34);ctx.fill();
+    ctx.font='92px serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('📻',90,96);
+    const link=g('ati180');if(link)link.href=cvs.toDataURL('image/png');
+  }catch{}
+
+  // iOS audio unlock - also unlocks AudioContext
+  document.addEventListener('touchstart',function u(){
+    aud.play().then(()=>aud.pause()).catch(()=>{});
+    if(IM._actx&&IM._actx.state==='suspended')try{IM._actx.resume();}catch{}
+    document.removeEventListener('touchstart',u);
+  },{once:true});
+
+  // iOS visibility change - re-push metadata when returning from lock screen
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden&&S.cur&&S.playing&&'mediaSession' in navigator){
+      updateMeta(S.cur);
+    }
+  });
 
   setTimeout(()=>g('spl').classList.add('h'),1800);
 
@@ -1341,6 +1394,8 @@ function init(){
   aud.addEventListener('playing',()=>{setPlaying(true);S.retries=0;IM.setUStop(false);setStatus('live');renderCards();IOS._startRecovery();});
   aud.addEventListener('pause',()=>{S.playing=false;updatePlayUI();g('ambient').classList.remove('playing');g('mplay').classList.remove('playing');g('fplay').classList.remove('playing');if('mediaSession' in navigator)navigator.mediaSession.playbackState=IM._uStop?'paused':'none';});
   aud.addEventListener('waiting',()=>setStatus('load'));
+  // iOS stalled recovery - auto-reconnect when stream stalls
+  aud.addEventListener('stalled',()=>{if(S.cur&&S.should&&!IM._uStop){setStatus('retry');setTimeout(()=>{if(S.cur&&S.should&&!IM._uStop){aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;aud.play().catch(()=>{});}},1500);}});
   aud.addEventListener('error',()=>{
     if(S.cur&&S.should&&!IM._uStop&&S.retries<4){S.retries++;toast(`Deneniyor (${S.retries}/4)...`,'warn');setStatus('retry');setTimeout(()=>{if(S.cur&&S.should){aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;aud.play().catch(()=>{});}},2000*S.retries);}
     else if(S.retries>=4){toast('Bağlantı kurulamadı','err');S.should=false;S.playing=false;updatePlayUI();}
