@@ -6,5 +6,10 @@
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="96" fill="url(#bg)"/>
-  <text x="256" y="340" font-size="260" text-anchor="middle" fill="white">📻</text>
+  <g fill="none" stroke="white" stroke-linecap="round">
+    <path stroke-width="36" opacity="0.5" d="M148,254 A152,152 0 0,1 364,254"/>
+    <path stroke-width="36" opacity="0.75" d="M188,294 A96,96 0 0,1 324,294"/>
+    <path stroke-width="36" d="M228,334 A40,40 0 0,1 284,334"/>
+  </g>
+  <circle cx="256" cy="362" r="24" fill="white"/>
 </svg>
