@@ -635,7 +635,7 @@ function updateMeta(s){
 }
 
 /* ── PLAY STATE ── */
-const S={cur:null,playing:false,should:false,resumable:false,retries:0};
+const S={cur:null,playing:false,should:false,resumable:false,softPaused:false,retries:0};
 const aud=g('aud');
 const _httpWarned=new Set();
 let _resumePromise=null,_resumeToken=0;
@@ -647,7 +647,7 @@ function warnHttpStream(s){
 
 function setPlaying(v){
   S.playing=v;
-  if(v){S.should=true;S.resumable=true;}
+  if(v){S.should=true;S.resumable=true;S.softPaused=false;aud.muted=false;aud.volume=IM._baseVol;}
   updatePlayUI();
   syncMediaSessionState();
   g('ambient').classList.toggle('playing',v);
@@ -710,19 +710,33 @@ function play(id){
   renderCards();
 }
 function togglePlay(){if(!S.cur)return;S.playing?pauseForUser({source:'app'}):userResume();}
+function shouldSoftPauseForIOS(source){
+  return _isIOS()&&S.cur&&!aud.paused&&source!=='sleep-timer';
+}
+function softPauseForIOS(){
+  // iOS can hand the lock-screen Play button back to Apple Music after a real
+  // audio.pause(). Keep the media element alive, but silent, so this PWA remains
+  // the active Media Session target and can resume from Control Center.
+  S.softPaused=true;
+  try{aud.muted=true;aud.volume=0;}catch{}
+  setPausedUI();
+}
 function pauseForUser(opts={}){
   if(!S.cur)return;
+  const source=opts.source||'app';
   S.should=false;S.resumable=opts.resumable!==false;IM.setUStop(false);
-  aud.pause();IOS._stopRecovery();NP.stop();setPausedUI();
+  IOS._stopRecovery();NP.stop();
+  if(shouldSoftPauseForIOS(source))softPauseForIOS();
+  else{S.softPaused=false;aud.pause();setPausedUI();}
   // Keep station metadata alive so iOS lock screen / Control Center can resume.
   updateMeta(S.cur);syncMediaSessionState();
 }
 function stopSession(reason,opts={}){
   const clearCurrent=opts.clearCurrent!==false;
   _resumeToken++;_resumePromise=null;
-  IM.setUStop(true);S.should=false;S.resumable=false;S.playing=false;
+  IM.setUStop(true);S.should=false;S.resumable=false;S.playing=false;S.softPaused=false;
   IOS._stopRecovery();DU.stopTick();NP.stop();
-  try{aud.pause();}catch{}
+  try{aud.muted=false;aud.volume=IM._baseVol;aud.pause();}catch{}
   if(clearCurrent){try{aud.removeAttribute('src');aud.load();}catch{}S.cur=null;}
   setPausedUI();
   if(clearCurrent){g('mplay').classList.remove('s');g('scr').classList.remove('mp-on');}
@@ -757,15 +771,19 @@ async function resumeCurrentStation(opts={}){
     await _resumeAudioContext();
     if(token!==_resumeToken||!S.cur)return false;
     try{
+      if(S.softPaused&&!aud.paused){
+        aud.muted=false;aud.volume=IM._baseVol;setPlaying(true);S.retries=0;setStatus('live');IOS._startRecovery();NP.start(S.cur);renderCards();
+        return true;
+      }
       if(_needsStreamReload()){aud.src=S.cur.u;aud.load();}
-      aud.volume=IM._baseVol;
+      aud.muted=false;aud.volume=IM._baseVol;
       await aud.play();
       if(token===_resumeToken){setPlaying(true);S.retries=0;setStatus('live');IOS._startRecovery();NP.start(S.cur);renderCards();}
       return true;
     }catch(firstErr){
       if(token!==_resumeToken||!S.cur)return false;
       try{
-        aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;
+        S.softPaused=false;aud.muted=false;aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;
         await _delay(source==='media-session'?350:600);
         await _resumeAudioContext();
         await aud.play();
@@ -805,7 +823,7 @@ function toggleShuffle(){
   g('btnFpShuffle').classList.toggle('shuffle-on',_shuffle);
   toast(_shuffle?'🔀 Karışık mod açık':'🔀 Karışık mod kapalı');
 }
-function setVol(v){const vol=v/100;aud.volume=vol;IM.setBaseVol(vol);g('volM').value=v;g('volF').value=v;}
+function setVol(v){const vol=v/100;if(!S.softPaused){aud.muted=false;aud.volume=vol;}IM.setBaseVol(vol);g('volM').value=v;g('volF').value=v;}
 function syncSliders(){const v=Math.round(IM._baseVol*100);g('volM').value=v;g('volF').value=v;}
 
 /* ── SHARE ── */
@@ -1435,8 +1453,9 @@ function init(){
   setTimeout(()=>g('spl').classList.add('h'),1800);
 
   /* audio events */
-  aud.addEventListener('playing',()=>{setPlaying(true);S.retries=0;IM.setUStop(false);setStatus('live');renderCards();IOS._startRecovery();});
+  aud.addEventListener('playing',()=>{if(S.softPaused)return;setPlaying(true);S.retries=0;IM.setUStop(false);setStatus('live');renderCards();IOS._startRecovery();});
   aud.addEventListener('pause',()=>{
+    S.softPaused=false;
     setPausedUI();
     if(S.cur&&!IM._uStop)updateMeta(S.cur);
   });
