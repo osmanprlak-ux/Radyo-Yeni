@@ -2,7 +2,7 @@
 'use strict';
 
 const LS={CH:'trch8',FV:'trfv8',RC:'trrc8',INT:'trint9',CAR:'trcar1',DS:'trds1',DU:'trdu1',SYNC:'trsync1'};
-const APP_VERSION='13.4';
+const APP_VERSION='13.5';
 const COLORS=['#7c6cf0','#ff6b9d','#3dd68c','#ffc857','#4834d4','#1abc9c','#ff5c6c','#00bcd4','#e91e63','#ff9a76','#6c5ce7','#00b894'];
 const GENRES=['Tümü','Pop','Rock','Haber','THM','TSM','Arabesk','Caz','Elektronik','Karma','Dini','Çocuk','Spor','Diğer'];
 const APIS=['de1','nl1','at1','de2'];
@@ -454,7 +454,7 @@ const IM={
   _reload(cb){
     if(!S.cur)return;
     if(this._actx&&this._actx.state==='suspended'){try{this._actx.resume().catch(()=>{});}catch(e){}}
-    aud.volume=0.01;aud.src=S.cur.u;aud.load();
+    aud.loop=false;aud.volume=0.01;aud.src=S.cur.u;aud.load();
     const attempt=(n)=>{
       if(!S.cur||this._uStop)return;
       aud.play().then(()=>{setPlaying(true);S.retries=0;setStatus('live');renderCards();IOS._startRecovery();if(cb)cb();}).catch(()=>{
@@ -639,9 +639,8 @@ function updateMeta(s){
 const S={cur:null,playing:false,should:false,resumable:false,softPaused:false,retries:0};
 const aud=g('aud');
 const _httpWarned=new Set();
-const IOS_HOLD_VOLUME=0;
 let _resumePromise=null,_resumeToken=0;
-let _iosPauseHoldPromise=null,_lastSoftPauseAt=0;
+let _iosPauseHoldPromise=null,_lastSoftPauseAt=0,_iosHoldSrc='',_iosHoldSwitching=false;
 function warnHttpStream(s){
   if(!s||!isHttpUrl(s.u)||_httpWarned.has(s.id))return;
   _httpWarned.add(s.id);
@@ -708,7 +707,7 @@ function play(id){
   // Bitrate
   if(s.br>0){g('fpBitrate').textContent=`${s.br} kbps`;g('fpBitrate').style.display='';}else{g('fpBitrate').style.display='none';}
   setStatus('conn');updateFavBtn();addHist(s);updateMeta(s);NP.start(s);updateCarNow();dsWarnMaybe(s);
-  aud.src=s.u;aud.load();aud.volume=IM._baseVol;
+  aud.loop=false;aud.src=s.u;aud.load();aud.volume=IM._baseVol;
   resumeCurrentStation({source:'station-select'});
   renderCards();
 }
@@ -716,13 +715,33 @@ function togglePlay(){if(!S.cur)return;S.playing?pauseForUser({source:'app'}):us
 function shouldSoftPauseForIOS(source){
   return _isIOS()&&S.cur&&!aud.paused&&source!=='sleep-timer';
 }
+function getIOSHoldSrc(){
+  if(_iosHoldSrc)return _iosHoldSrc;
+  const sampleRate=8000,seconds=1,samples=sampleRate*seconds,dataBytes=samples*2;
+  const buf=new ArrayBuffer(44+dataBytes),v=new DataView(buf);
+  const str=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
+  str(0,'RIFF');v.setUint32(4,36+dataBytes,true);str(8,'WAVE');str(12,'fmt ');
+  v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,sampleRate,true);v.setUint32(28,sampleRate*2,true);
+  v.setUint16(32,2,true);v.setUint16(34,16,true);str(36,'data');v.setUint32(40,dataBytes,true);
+  _iosHoldSrc=URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
+  return _iosHoldSrc;
+}
+function isIOSHoldAudioActive(){
+  return !!(_iosHoldSrc&&(aud.currentSrc===_iosHoldSrc||aud.src===_iosHoldSrc));
+}
 function softPauseForIOS(){
-  // iOS can hand the lock-screen Play button back to Apple Music after a real
-  // audio.pause(). Keep the media element alive at a near-silent volume so this PWA remains
-  // the active Media Session target and can resume from Control Center.
+  // iOS ignores programmatic volume changes for live audio. Swap the live stream
+  // to a silent loop so the radio really stops while the PWA keeps Now Playing.
   S.softPaused=true;_lastSoftPauseAt=Date.now();
-  try{aud.muted=false;aud.volume=IOS_HOLD_VOLUME;}catch{}
-  setPausedUI();
+  _iosHoldSwitching=true;
+  try{
+    aud.pause();
+    aud.loop=true;aud.muted=false;aud.src=getIOSHoldSrc();aud.load();
+    aud.play().catch(()=>{});
+  }catch{}
+  setTimeout(()=>{_iosHoldSwitching=false;},600);
+  setPausedUI();updateMeta(S.cur);syncMediaSessionState();
 }
 function holdIOSMediaSessionAfterSystemPause(){
   if(!_isIOS()||!S.cur||IM._uStop||(!S.resumable&&!S.should))return false;
@@ -733,14 +752,14 @@ function holdIOSMediaSessionAfterSystemPause(){
     try{
       await _resumeAudioContext();
       if(!S.cur||IM._uStop||!S.softPaused)return;
-      if(_needsStreamReload()){aud.src=S.cur.u;aud.load();}
-      aud.muted=false;aud.volume=IOS_HOLD_VOLUME;
+      _iosHoldSwitching=true;
+      aud.loop=true;aud.muted=false;aud.src=getIOSHoldSrc();aud.load();
       await aud.play();
       if(S.cur&&!IM._uStop&&S.softPaused){setPausedUI();updateMeta(S.cur);syncMediaSessionState();}
     }catch{
       // If iOS refuses play() here, the PWA cannot reclaim the lock-screen target
       // until Safari grants another media-session action or user gesture.
-    }finally{_iosPauseHoldPromise=null;}
+    }finally{_iosPauseHoldPromise=null;setTimeout(()=>{_iosHoldSwitching=false;},600);}
   })();
   return true;
 }
@@ -759,7 +778,7 @@ function stopSession(reason,opts={}){
   _resumeToken++;_resumePromise=null;
   IM.setUStop(true);S.should=false;S.resumable=false;S.playing=false;S.softPaused=false;
   IOS._stopRecovery();DU.stopTick();NP.stop();
-  try{aud.muted=false;aud.volume=IM._baseVol;aud.pause();}catch{}
+  try{aud.loop=false;aud.muted=false;aud.volume=IM._baseVol;aud.pause();}catch{}
   if(clearCurrent){try{aud.removeAttribute('src');aud.load();}catch{}S.cur=null;}
   setPausedUI();
   if(clearCurrent){g('mplay').classList.remove('s');g('scr').classList.remove('mp-on');}
@@ -774,7 +793,7 @@ function _sameAudioSrc(url){
 }
 function _needsStreamReload(){
   if(!S.cur)return false;
-  return !aud.src||!aud.currentSrc||!_sameAudioSrc(S.cur.u)||aud.ended||!!aud.error||aud.readyState===0;
+  return isIOSHoldAudioActive()||!aud.src||!aud.currentSrc||!_sameAudioSrc(S.cur.u)||aud.ended||!!aud.error||aud.readyState===0;
 }
 function _resumeAudioContext(){
   if(IM._actx&&IM._actx.state!=='running'){
@@ -794,11 +813,8 @@ async function resumeCurrentStation(opts={}){
     await _resumeAudioContext();
     if(token!==_resumeToken||!S.cur)return false;
     try{
-      if(S.softPaused&&!aud.paused){
-        aud.muted=false;aud.volume=IM._baseVol;setPlaying(true);S.retries=0;setStatus('live');IOS._startRecovery();NP.start(S.cur);renderCards();
-        return true;
-      }
-      if(_needsStreamReload()){aud.src=S.cur.u;aud.load();}
+      if(S.softPaused){S.softPaused=false;aud.loop=false;}
+      if(_needsStreamReload()){aud.loop=false;aud.src=S.cur.u;aud.load();}
       aud.muted=false;aud.volume=IM._baseVol;
       await aud.play();
       if(token===_resumeToken){setPlaying(true);S.retries=0;setStatus('live');IOS._startRecovery();NP.start(S.cur);renderCards();}
@@ -806,7 +822,7 @@ async function resumeCurrentStation(opts={}){
     }catch(firstErr){
       if(token!==_resumeToken||!S.cur)return false;
       try{
-        S.softPaused=false;aud.muted=false;aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;
+        S.softPaused=false;aud.loop=false;aud.muted=false;aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;
         await _delay(source==='media-session'?350:600);
         await _resumeAudioContext();
         await aud.play();
@@ -1478,6 +1494,7 @@ function init(){
   /* audio events */
   aud.addEventListener('playing',()=>{if(S.softPaused)return;setPlaying(true);S.retries=0;IM.setUStop(false);setStatus('live');renderCards();IOS._startRecovery();});
   aud.addEventListener('pause',()=>{
+    if(_iosHoldSwitching)return;
     if(holdIOSMediaSessionAfterSystemPause())return;
     S.softPaused=false;
     setPausedUI();
