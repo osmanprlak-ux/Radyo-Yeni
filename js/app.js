@@ -557,7 +557,7 @@ function setupMS(){
   if(!('mediaSession' in navigator))return;
   const set=(a,h)=>{try{navigator.mediaSession.setActionHandler(a,h);}catch{}};
   set('play',()=>{resumeFromMediaSession();});
-  set('pause',()=>{if(!S.cur)return;if(S.softPaused)resumeFromMediaSession();else pauseForUser({source:'media-session'});});
+  set('pause',()=>{if(!S.cur)return;if(S.softPaused&&Date.now()-_lastSoftPauseAt>800)resumeFromMediaSession();else pauseForUser({source:'media-session'});});
   set('previoustrack',msPrev);
   set('nexttrack',msNext);
   if(_isIOS())set('stop',null);
@@ -640,6 +640,7 @@ const S={cur:null,playing:false,should:false,resumable:false,softPaused:false,re
 const aud=g('aud');
 const _httpWarned=new Set();
 let _resumePromise=null,_resumeToken=0;
+let _iosPauseHoldPromise=null,_lastSoftPauseAt=0;
 function warnHttpStream(s){
   if(!s||!isHttpUrl(s.u)||_httpWarned.has(s.id))return;
   _httpWarned.add(s.id);
@@ -718,9 +719,29 @@ function softPauseForIOS(){
   // iOS can hand the lock-screen Play button back to Apple Music after a real
   // audio.pause(). Keep the media element alive, but silent, so this PWA remains
   // the active Media Session target and can resume from Control Center.
-  S.softPaused=true;
+  S.softPaused=true;_lastSoftPauseAt=Date.now();
   try{aud.muted=true;aud.volume=0;}catch{}
   setPausedUI();
+}
+function holdIOSMediaSessionAfterSystemPause(){
+  if(!_isIOS()||!S.cur||IM._uStop||(!S.resumable&&!S.should))return false;
+  S.should=false;S.resumable=true;S.softPaused=true;_lastSoftPauseAt=Date.now();
+  IOS._stopRecovery();NP.stop();setPausedUI();updateMeta(S.cur);syncMediaSessionState();
+  if(_iosPauseHoldPromise)return true;
+  _iosPauseHoldPromise=(async()=>{
+    try{
+      await _resumeAudioContext();
+      if(!S.cur||IM._uStop||!S.softPaused)return;
+      if(_needsStreamReload()){aud.src=S.cur.u;aud.load();}
+      aud.muted=true;aud.volume=0;
+      await aud.play();
+      if(S.cur&&!IM._uStop&&S.softPaused){setPausedUI();updateMeta(S.cur);syncMediaSessionState();}
+    }catch{
+      // If iOS refuses play() here, the PWA cannot reclaim the lock-screen target
+      // until Safari grants another media-session action or user gesture.
+    }finally{_iosPauseHoldPromise=null;}
+  })();
+  return true;
 }
 function pauseForUser(opts={}){
   if(!S.cur)return;
@@ -1456,6 +1477,7 @@ function init(){
   /* audio events */
   aud.addEventListener('playing',()=>{if(S.softPaused)return;setPlaying(true);S.retries=0;IM.setUStop(false);setStatus('live');renderCards();IOS._startRecovery();});
   aud.addEventListener('pause',()=>{
+    if(holdIOSMediaSessionAfterSystemPause())return;
     S.softPaused=false;
     setPausedUI();
     if(S.cur&&!IM._uStop)updateMeta(S.cur);
