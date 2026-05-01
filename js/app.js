@@ -2,7 +2,7 @@
 'use strict';
 
 const LS={CH:'trch8',FV:'trfv8',RC:'trrc8',INT:'trint9',CAR:'trcar1',DS:'trds1',DU:'trdu1',SYNC:'trsync1'};
-const APP_VERSION='13.6';
+const APP_VERSION='13.7';
 const COLORS=['#7c6cf0','#ff6b9d','#3dd68c','#ffc857','#4834d4','#1abc9c','#ff5c6c','#00bcd4','#e91e63','#ff9a76','#6c5ce7','#00b894'];
 const GENRES=['Tümü','Pop','Rock','Haber','THM','TSM','Arabesk','Caz','Elektronik','Karma','Dini','Çocuk','Spor','Diğer'];
 const APIS=['de1','nl1','at1','de2'];
@@ -556,12 +556,11 @@ function msPrev(){
 function setupMS(){
   if(!('mediaSession' in navigator))return;
   const set=(a,h)=>{try{navigator.mediaSession.setActionHandler(a,h);}catch{}};
-  set('play',()=>{resumeFromMediaSession();});
-  set('pause',()=>{if(!S.cur)return;if(S.softPaused){updateMeta(S.cur);syncMediaSessionState();return;}pauseForUser({source:'media-session'});});
+  set('play',()=>handleMediaSessionPlay());
+  set('pause',()=>handleMediaSessionPause());
   set('previoustrack',msPrev);
   set('nexttrack',msNext);
-  if(_isIOS())set('stop',null);
-  else set('stop',()=>{if(S.cur)pauseForUser({source:'media-session-stop'});});
+  set('stop',()=>handleMediaSessionStop());
   // Canlı yayında seek bar gözükmesin
   set('seekto',null);set('seekbackward',null);set('seekforward',null);
 }
@@ -729,6 +728,26 @@ function getIOSHoldSrc(){
 }
 function isIOSHoldAudioActive(){
   return !!(_iosHoldSrc&&(aud.currentSrc===_iosHoldSrc||aud.src===_iosHoldSrc));
+}
+function shouldTreatIOSPauseAsResume(){
+  return _isIOS()&&S.softPaused&&(Date.now()-_lastSoftPauseAt>250);
+}
+function handleMediaSessionPlay(){
+  if(S.cur)resumeFromMediaSession();
+}
+function handleMediaSessionPause(){
+  if(!S.cur)return;
+  // While the silent iOS hold loop is active, iOS may still deliver a "pause"
+  // action when the user taps the lock-screen Play button. Treat that as resume.
+  if(shouldTreatIOSPauseAsResume()){resumeFromMediaSession();return;}
+  if(S.softPaused){updateMeta(S.cur);syncMediaSessionState();return;}
+  pauseForUser({source:'media-session'});
+}
+function handleMediaSessionStop(){
+  if(!S.cur)return;
+  if(shouldTreatIOSPauseAsResume()){resumeFromMediaSession();return;}
+  if(_isIOS()){pauseForUser({source:'media-session-stop'});return;}
+  stopSession('media-session-stop',{clearCurrent:false});
 }
 function softPauseForIOS(){
   // iOS ignores programmatic volume changes for live audio. Swap the live stream
