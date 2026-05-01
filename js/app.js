@@ -530,8 +530,8 @@ const IOS={
   },
   _startRecovery(){if(this._recoveryTimer)return;this._recoveryTimer=setInterval(()=>{if(S.cur&&S.should&&this.a.paused&&!IM._uStop&&!IM._interrupted&&!this._rel)this.resume(0);},12000);},
   _stopRecovery(){if(this._recoveryTimer){clearInterval(this._recoveryTimer);this._recoveryTimer=null;}},
-  resume(delay){clearTimeout(this._rt);this._rt=setTimeout(()=>{if(!S.cur||IM._uStop||!S.should||IM._interrupted)return;aud.volume=IM._baseVol;aud.play().then(()=>{setPlaying(true);S.retries=0;setStatus('live');IM._hideBanner();renderCards();}).catch(()=>this.reload());},Math.max(0,delay));},
-  reload(){if(!S.cur||this._rel||IM._uStop)return;this._rel=true;aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;aud.play().then(()=>{setPlaying(true);S.retries=0;this._rel=false;setStatus('live');renderCards();}).catch(()=>{this._rel=false;});}
+  resume(delay){clearTimeout(this._rt);this._rt=setTimeout(()=>{if(!S.cur||IM._uStop||!S.should||IM._interrupted)return;resumeCurrentStation({source:'ios-recovery'}).finally(()=>IM._hideBanner());},Math.max(0,delay));},
+  reload(){if(!S.cur||this._rel||IM._uStop)return;this._rel=true;try{aud.removeAttribute('src');aud.load();}catch{}resumeCurrentStation({source:'ios-reload'}).finally(()=>{this._rel=false;});}
 };
 
 /* ── MEDIA SESSION ──
@@ -556,11 +556,11 @@ function msPrev(){
 function setupMS(){
   if(!('mediaSession' in navigator))return;
   const set=(a,h)=>{try{navigator.mediaSession.setActionHandler(a,h);}catch{}};
-  set('play',()=>{if(S.cur){IM.setUStop(false);S.should=true;aud.play().catch(()=>IOS.reload());navigator.mediaSession.playbackState='playing';}});
-  set('pause',()=>{if(S.cur){userPause();navigator.mediaSession.playbackState='paused';}});
+  set('play',()=>{resumeFromMediaSession();});
+  set('pause',()=>{if(S.cur)pauseForUser({source:'media-session'});});
   set('previoustrack',msPrev);
   set('nexttrack',msNext);
-  set('stop',()=>{if(S.cur){userPause();navigator.mediaSession.playbackState='none';}});
+  set('stop',()=>{if(S.cur)pauseForUser({source:'media-session-stop'});});
   // Canlı yayında seek bar gözükmesin
   set('seekto',null);set('seekbackward',null);set('seekforward',null);
 }
@@ -600,14 +600,23 @@ function _makeArtwork(s){
     return dataUrl;
   }catch{return null;}
 }
+function _artMime(src){
+  try{
+    const p=new URL(src,location.href).pathname.toLowerCase();
+    if(p.endsWith('.jpg')||p.endsWith('.jpeg'))return 'image/jpeg';
+    if(p.endsWith('.webp'))return 'image/webp';
+  }catch{}
+  return 'image/png';
+}
 function updateMeta(s){
   if(!('mediaSession' in navigator))return;
   const artwork=[];
-  if(s.img){
+  if(s.img&&isUrl(s.img)){
     // Station logo - primary artwork for lock screen
-    artwork.push({src:s.img,sizes:'96x96',type:'image/png'});
-    artwork.push({src:s.img,sizes:'192x192',type:'image/png'});
-    artwork.push({src:s.img,sizes:'512x512',type:'image/png'});
+    const type=_artMime(s.img);
+    artwork.push({src:s.img,sizes:'96x96',type});
+    artwork.push({src:s.img,sizes:'192x192',type});
+    artwork.push({src:s.img,sizes:'512x512',type});
   }
   // Canvas fallback with station branding
   const fallback=_makeArtwork(s);
@@ -620,15 +629,16 @@ function updateMeta(s){
       artwork
     });
   }catch{}
-  navigator.mediaSession.playbackState='playing';
+  syncMediaSessionState();
   // Canlı yayın - seek bar gösterme
   try{navigator.mediaSession.setPositionState({duration:0,position:0,playbackRate:1});}catch{}
 }
 
 /* ── PLAY STATE ── */
-const S={cur:null,playing:false,should:false,retries:0};
+const S={cur:null,playing:false,should:false,resumable:false,retries:0};
 const aud=g('aud');
 const _httpWarned=new Set();
+let _resumePromise=null,_resumeToken=0;
 function warnHttpStream(s){
   if(!s||!isHttpUrl(s.u)||_httpWarned.has(s.id))return;
   _httpWarned.add(s.id);
@@ -636,8 +646,10 @@ function warnHttpStream(s){
 }
 
 function setPlaying(v){
-  S.playing=v;S.should=v;updatePlayUI();
-  if('mediaSession' in navigator)navigator.mediaSession.playbackState=v?'playing':'paused';
+  S.playing=v;
+  if(v){S.should=true;S.resumable=true;}
+  updatePlayUI();
+  syncMediaSessionState();
   g('ambient').classList.toggle('playing',v);
   g('mplay').classList.toggle('playing',v);
   g('fplay').classList.toggle('playing',v);
@@ -645,6 +657,24 @@ function setPlaying(v){
   updateCarNow();
 }
 function updatePlayUI(){const ic=S.playing?'⏸':'▶';g('btnPP').textContent=ic;g('btnFpPlay').textContent=ic;g('fpVis').classList.toggle('paused',!S.playing);}
+function syncMediaSessionState(){
+  if(!('mediaSession' in navigator))return;
+  try{
+    if(S.cur){
+      if(!navigator.mediaSession.metadata)updateMeta(S.cur);
+      navigator.mediaSession.playbackState=S.playing?'playing':'paused';
+    }else{
+      navigator.mediaSession.playbackState='none';
+    }
+  }catch{}
+}
+function setPausedUI(){
+  S.playing=false;updatePlayUI();
+  g('ambient').classList.remove('playing');
+  g('mplay').classList.remove('playing');
+  g('fplay').classList.remove('playing');
+  DU.stopTick();updateCarNow();syncMediaSessionState();
+}
 function setStatus(t){
   const el=g('mStat');
   if(t==='live')el.innerHTML='<span class="cdot"></span>Canlı Yayın';
@@ -657,7 +687,8 @@ function setStatus(t){
 function play(id){
   const s=ch.find(x=>x.id===id);if(!s)return;
   warnHttpStream(s);
-  S.cur=s;S.retries=0;S.should=true;IM.setUStop(false);
+  _resumeToken++;_resumePromise=null;
+  S.cur=s;S.retries=0;S.should=true;S.resumable=true;IM.setUStop(false);
   g('mplay').classList.add('s');g('scr').classList.add('mp-on');
   // Mini player icon
   const mIco=g('mIco');mIco.innerHTML='';mIco.style.background=s.c||'var(--ac)';
@@ -675,12 +706,85 @@ function play(id){
   if(s.br>0){g('fpBitrate').textContent=`${s.br} kbps`;g('fpBitrate').style.display='';}else{g('fpBitrate').style.display='none';}
   setStatus('conn');updateFavBtn();addHist(s);updateMeta(s);NP.start(s);updateCarNow();dsWarnMaybe(s);
   aud.src=s.u;aud.load();aud.volume=IM._baseVol;
-  aud.play().then(()=>setPlaying(true)).catch(()=>setTimeout(()=>{if(S.cur?.id===id&&S.should)aud.play().then(()=>setPlaying(true)).catch(()=>setTimeout(()=>{if(S.cur?.id===id&&S.should){aud.src=s.u;aud.load();aud.volume=IM._baseVol;aud.play().then(()=>setPlaying(true)).catch(()=>{toast('Yanıt yok','err');S.should=false;S.playing=false;updatePlayUI();});}},2000));},1500));
+  resumeCurrentStation({source:'station-select'});
   renderCards();
 }
-function togglePlay(){if(!S.cur)return;S.playing?userPause():userResume();}
-function userPause(){IM.setUStop(true);S.should=false;aud.pause();S.playing=false;updatePlayUI();g('ambient').classList.remove('playing');g('mplay').classList.remove('playing');g('fplay').classList.remove('playing');IOS._stopRecovery();DU.stopTick();NP.stop();}
-function userResume(){IM.setUStop(false);S.should=true;if(IM._actx&&IM._actx.state==='suspended'){try{IM._actx.resume().catch(()=>{});}catch(e){}}aud.play().then(()=>{IOS._startRecovery();}).catch(()=>{if(!S.cur)return;aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;aud.play().then(()=>{IOS._startRecovery();}).catch(()=>toast('Tekrar deneyin','warn'));});}
+function togglePlay(){if(!S.cur)return;S.playing?pauseForUser({source:'app'}):userResume();}
+function pauseForUser(opts={}){
+  if(!S.cur)return;
+  S.should=false;S.resumable=opts.resumable!==false;IM.setUStop(false);
+  aud.pause();IOS._stopRecovery();NP.stop();setPausedUI();
+  // Keep station metadata alive so iOS lock screen / Control Center can resume.
+  updateMeta(S.cur);syncMediaSessionState();
+}
+function stopSession(reason,opts={}){
+  const clearCurrent=opts.clearCurrent!==false;
+  _resumeToken++;_resumePromise=null;
+  IM.setUStop(true);S.should=false;S.resumable=false;S.playing=false;
+  IOS._stopRecovery();DU.stopTick();NP.stop();
+  try{aud.pause();}catch{}
+  if(clearCurrent){try{aud.removeAttribute('src');aud.load();}catch{}S.cur=null;}
+  setPausedUI();
+  if(clearCurrent){g('mplay').classList.remove('s');g('scr').classList.remove('mp-on');}
+  syncMediaSessionState();updateCarNow();
+}
+function _sameAudioSrc(url){
+  if(!url)return false;
+  try{
+    const want=new URL(url,location.href).href;
+    return aud.currentSrc===want||aud.src===want;
+  }catch{return aud.currentSrc===url||aud.src===url;}
+}
+function _needsStreamReload(){
+  if(!S.cur)return false;
+  return !aud.src||!aud.currentSrc||!_sameAudioSrc(S.cur.u)||aud.ended||!!aud.error||aud.readyState===0;
+}
+function _resumeAudioContext(){
+  if(IM._actx&&IM._actx.state!=='running'){
+    try{return IM._actx.resume().catch(()=>{});}catch{}
+  }
+  return Promise.resolve();
+}
+function _delay(ms){return new Promise(r=>setTimeout(r,ms));}
+async function resumeCurrentStation(opts={}){
+  if(!S.cur)return false;
+  if(_resumePromise)return _resumePromise;
+  const token=++_resumeToken,source=opts.source||'app';
+  _resumePromise=(async()=>{
+    IM.setUStop(false);IM._clearTimers();IM._interrupted=false;IM._type=null;IM._hideBanner();
+    S.should=true;S.resumable=true;
+    updateMeta(S.cur);setStatus('conn');
+    await _resumeAudioContext();
+    if(token!==_resumeToken||!S.cur)return false;
+    try{
+      if(_needsStreamReload()){aud.src=S.cur.u;aud.load();}
+      aud.volume=IM._baseVol;
+      await aud.play();
+      if(token===_resumeToken){setPlaying(true);S.retries=0;setStatus('live');IOS._startRecovery();NP.start(S.cur);renderCards();}
+      return true;
+    }catch(firstErr){
+      if(token!==_resumeToken||!S.cur)return false;
+      try{
+        aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;
+        await _delay(source==='media-session'?350:600);
+        await _resumeAudioContext();
+        await aud.play();
+        if(token===_resumeToken){setPlaying(true);S.retries=0;setStatus('live');IOS._startRecovery();NP.start(S.cur);renderCards();}
+        return true;
+      }catch{
+        if(token===_resumeToken){
+          setStatus('retry');setPausedUI();updateMeta(S.cur);
+          if(source!=='media-session')toast('Tekrar deneyin','warn');
+        }
+        return false;
+      }
+    }
+  })().finally(()=>{if(token===_resumeToken)_resumePromise=null;});
+  return _resumePromise;
+}
+function resumeFromMediaSession(){return resumeCurrentStation({source:'media-session'});}
+function userPause(){pauseForUser({source:'app'});}
+function userResume(){return resumeCurrentStation({source:'app'});}
 function prevSt(){
   if(!S.cur||ch.length<2)return;
   if(_shuffle){shufflePlay();return;}
@@ -1009,7 +1113,7 @@ function setSleep(min){
   if(_slT){clearInterval(_slT);_slT=null;}const lbl=g('sleepLbl');
   if(min===0){lbl.classList.remove('s');return;}
   const end=Date.now()+min*60000;lbl.classList.add('s');
-  _slT=setInterval(()=>{const l=end-Date.now();if(l<=0){userPause();clearInterval(_slT);_slT=null;lbl.classList.remove('s');g('sleepSel').value='0';toast('Uyku zamanlayıcısı: durdu');return;}lbl.textContent=`⏰ ${Math.floor(l/60000)}:${Math.floor((l%60000)/1000).toString().padStart(2,'0')}`;},1000);
+  _slT=setInterval(()=>{const l=end-Date.now();if(l<=0){stopSession('sleep-timer');clearInterval(_slT);_slT=null;lbl.classList.remove('s');g('sleepSel').value='0';toast('Uyku zamanlayıcısı: durdu');return;}lbl.textContent=`⏰ ${Math.floor(l/60000)}:${Math.floor((l%60000)/1000).toString().padStart(2,'0')}`;},1000);
   toast(`⏰ ${min} dk sonra durur`);
 }
 
@@ -1027,7 +1131,7 @@ async function delCh(id){
   const s=ch.find(x=>x.id===id);
   const ok=await confirm2('Kanalı sil',`"${s?.n||'Bu kanal'}" silinecek. Emin misiniz?`);if(!ok)return;
   ch=ch.filter(x=>x.id!==id);
-  if(S.cur?.id===id){S.cur=null;S.should=false;IM.setUStop(true);aud.pause();S.playing=false;g('mplay').classList.remove('s');g('scr').classList.remove('mp-on');updatePlayUI();}
+  if(S.cur?.id===id){stopSession('delete-station');}
   dataSave();renderCards();renderSettings();updateSearchVisibility();updateNavBadge();toast('Silindi');
 }
 
@@ -1192,8 +1296,8 @@ function doImport(e){
 }
 async function doReset(){
   const ok=await confirm2('Tümünü sil','Tüm kanallar, favoriler ve geçmiş kalıcı olarak silinecek.');if(!ok)return;
-  ch=[];fv=[];rc=[];S.cur=null;S.should=false;IM.setUStop(true);aud.pause();S.playing=false;
-  g('mplay').classList.remove('s');g('scr').classList.remove('mp-on');updatePlayUI();dataSave();renderCards();renderSettings();updateSearchVisibility();updateNavBadge();toast('Sıfırlandı');
+  ch=[];fv=[];rc=[];stopSession('reset-all');
+  dataSave();renderCards();renderSettings();updateSearchVisibility();updateNavBadge();toast('Sıfırlandı');
 }
 
 /* ── KEYBOARD SHORTCUTS ── */
@@ -1300,7 +1404,7 @@ function setupInstallPrompt(){
 function setupOfflineDetection(){
   const bar=g('offlineBar');
   const update=()=>{bar.classList.toggle('s',!navigator.onLine);};
-  window.addEventListener('online',()=>{update();toast('Bağlantı kuruldu','ok');if(S.cur&&S.should&&aud.paused&&!IM._uStop)IOS.resume(1000);});
+  window.addEventListener('online',()=>{update();toast('Bağlantı kuruldu','ok');if(S.cur&&S.should&&aud.paused&&!IM._uStop)resumeCurrentStation({source:'online'});});
   window.addEventListener('offline',()=>{update();toast('Bağlantı kesildi','warn');});
   update();
 }
@@ -1321,20 +1425,6 @@ function init(){
 
   IM.init(aud);IOS.init(aud);setupMS();setupInstallPrompt();setupOfflineDetection();
 
-  // Generate PNG apple-touch-icon for iOS home screen (SVG not supported by iOS)
-  try{
-    const cvs=document.createElement('canvas');cvs.width=180;cvs.height=180;
-    const ctx=cvs.getContext('2d');
-    const grd=ctx.createLinearGradient(0,0,180,180);grd.addColorStop(0,'#7c6cf0');grd.addColorStop(1,'#ff6b9d');
-    ctx.fillStyle=grd;ctx.beginPath();if(ctx.roundRect){ctx.roundRect(0,0,180,180,34);}else{ctx.rect(0,0,180,180);}ctx.fill();
-    const cx=90,cy=127;
-    ctx.strokeStyle='white';ctx.lineCap='round';
-    [[53,0.5],[34,0.75],[14,1]].forEach(([r,a])=>{ctx.globalAlpha=a;ctx.lineWidth=13;ctx.beginPath();ctx.arc(cx,cy,r,1.25*Math.PI,1.75*Math.PI,false);ctx.stroke();});
-    ctx.globalAlpha=1;ctx.fillStyle='white';ctx.beginPath();ctx.arc(cx,cy+8,8,0,2*Math.PI);ctx.fill();
-    const png=cvs.toDataURL('image/png');
-    [g('ati180'),g('atiAny')].forEach(l=>{if(l)l.href=png;});
-  }catch{}
-
   // iOS audio unlock - also unlocks AudioContext
   document.addEventListener('touchstart',function u(){
     aud.play().then(()=>aud.pause()).catch(()=>{});
@@ -1347,13 +1437,8 @@ function init(){
   /* audio events */
   aud.addEventListener('playing',()=>{setPlaying(true);S.retries=0;IM.setUStop(false);setStatus('live');renderCards();IOS._startRecovery();});
   aud.addEventListener('pause',()=>{
-    S.playing=false;updatePlayUI();
-    g('ambient').classList.remove('playing');g('mplay').classList.remove('playing');g('fplay').classList.remove('playing');
-    if('mediaSession' in navigator){
-      // Interrupt sırasında kontrolleri kilit ekranında göstermeye devam et
-      if(IM._interrupted)navigator.mediaSession.playbackState='paused';
-      else navigator.mediaSession.playbackState=IM._uStop?'paused':'none';
-    }
+    setPausedUI();
+    if(S.cur&&!IM._uStop)updateMeta(S.cur);
   });
   aud.addEventListener('waiting',()=>setStatus('load'));
   /* Exponential backoff reconnect — tünel/sinyal kesintisi için
@@ -1369,8 +1454,7 @@ function init(){
     setTimeout(()=>{
       if(!S.cur||!S.should||IM._uStop||IM._interrupted)return;
       if(!navigator.onLine)return; // online event'i kendi dener
-      aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;
-      aud.play().catch(()=>{});
+      resumeCurrentStation({source:'audio-error'});
     },delay);
   });
   /* Stalled/waiting — 8sn yanıtsızsa tetikle */
@@ -1380,7 +1464,7 @@ function init(){
     _stallT=setTimeout(()=>{
       if(!S.cur||!S.should||IM._uStop||IM._interrupted)return;
       if(aud.readyState>=2&&!aud.paused)return;
-      try{aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;aud.play().catch(()=>{});}catch{}
+      resumeCurrentStation({source:'audio-stalled'});
     },8000);
   });
   aud.addEventListener('playing',()=>{clearTimeout(_stallT);_stallT=null;});
@@ -1439,7 +1523,7 @@ function init(){
   g('swDataSaver').addEventListener('change',e=>{DS.enabled=e.target.checked;DS.warnedThisSession=false;saveDS();toast(DS.enabled?'Ekonomi modu açık':'Ekonomi modu kapalı');});
   g('btnResetData').addEventListener('click',()=>DU.reset());
   /* Online geri gelince anında reconnect dene */
-  window.addEventListener('online',()=>{if(S.cur&&S.should&&aud.paused&&!IM._uStop&&!IM._interrupted){S.retries=0;try{aud.src=S.cur.u;aud.load();aud.volume=IM._baseVol;aud.play().catch(()=>{});}catch{}}});
+  window.addEventListener('online',()=>{if(S.cur&&S.should&&aud.paused&&!IM._uStop&&!IM._interrupted){S.retries=0;resumeCurrentStation({source:'online-fast'});}});
 
   /* search API */
   g('bTR').addEventListener('click',()=>{const q=g('qTR').value.trim();if(!q){toast('Arama yazın','warn');return;}doSearch(q,'&countrycode=TR','rTR','tr');});
