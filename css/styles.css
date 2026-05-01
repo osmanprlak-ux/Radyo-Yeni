@@ -436,6 +436,23 @@ background-repeat:repeat;background-size:128px 128px}
 .kbd-hint.s{opacity:1;transform:translateX(-50%) translateY(0)}
 .kbd-hint kbd{display:inline-block;background:var(--cd2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:9px;font-family:var(--font);margin:0 2px}
 
+/* iOS touch targets and safe-area breathing room */
+.abtn,.ppb,.fp-sb,.fp-x,.search-clear,.cfm-btn,.fbtn,.sr-add,.ios-close-btn,.install-bar .ib-btn{min-width:44px;min-height:44px}
+.bnav button{min-height:54px;padding-bottom:max(8px,calc(var(--sb) * .35))}
+.mplay{bottom:calc(68px + var(--sb))}
+.modal-c,.ios-box{padding-bottom:calc(24px + var(--sb))}
+.fp-body{padding-bottom:calc(var(--sb) + 28px)}
+.car-favs{padding-bottom:calc(10px + var(--sb))}
+
+@media (max-width:380px){
+  .hdr{padding-left:14px;padding-right:14px}
+  .pad,.set-sec{padding-left:14px;padding-right:14px}
+  .fp-body{padding-left:20px;padding-right:20px}
+  .fp-ctrls{gap:12px}
+  .mplay{width:calc(100% - 12px)}
+  .install-bar{width:calc(100% - 16px)}
+}
+
 /* ─── PERFORMANCE: low-end device ─── */
 @media (max-width:380px){
   .ambient-orb{filter:blur(60px)}
