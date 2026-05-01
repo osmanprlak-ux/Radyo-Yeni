@@ -557,10 +557,11 @@ function setupMS(){
   if(!('mediaSession' in navigator))return;
   const set=(a,h)=>{try{navigator.mediaSession.setActionHandler(a,h);}catch{}};
   set('play',()=>{resumeFromMediaSession();});
-  set('pause',()=>{if(S.cur)pauseForUser({source:'media-session'});});
+  set('pause',()=>{if(!S.cur)return;if(S.softPaused)resumeFromMediaSession();else pauseForUser({source:'media-session'});});
   set('previoustrack',msPrev);
   set('nexttrack',msNext);
-  set('stop',()=>{if(S.cur)pauseForUser({source:'media-session-stop'});});
+  if(_isIOS())set('stop',null);
+  else set('stop',()=>{if(S.cur)pauseForUser({source:'media-session-stop'});});
   // Canlı yayında seek bar gözükmesin
   set('seekto',null);set('seekbackward',null);set('seekforward',null);
 }
@@ -662,7 +663,7 @@ function syncMediaSessionState(){
   try{
     if(S.cur){
       if(!navigator.mediaSession.metadata)updateMeta(S.cur);
-      navigator.mediaSession.playbackState=S.playing?'playing':'paused';
+      navigator.mediaSession.playbackState=(S.softPaused&&_isIOS())?'playing':(S.playing?'playing':'paused');
     }else{
       navigator.mediaSession.playbackState='none';
     }
