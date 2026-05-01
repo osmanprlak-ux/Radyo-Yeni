@@ -639,6 +639,7 @@ function updateMeta(s){
 const S={cur:null,playing:false,should:false,resumable:false,softPaused:false,retries:0};
 const aud=g('aud');
 const _httpWarned=new Set();
+const IOS_HOLD_VOLUME=0.001;
 let _resumePromise=null,_resumeToken=0;
 let _iosPauseHoldPromise=null,_lastSoftPauseAt=0;
 function warnHttpStream(s){
@@ -717,10 +718,10 @@ function shouldSoftPauseForIOS(source){
 }
 function softPauseForIOS(){
   // iOS can hand the lock-screen Play button back to Apple Music after a real
-  // audio.pause(). Keep the media element alive, but silent, so this PWA remains
+  // audio.pause(). Keep the media element alive at a near-silent volume so this PWA remains
   // the active Media Session target and can resume from Control Center.
   S.softPaused=true;_lastSoftPauseAt=Date.now();
-  try{aud.muted=true;aud.volume=0;}catch{}
+  try{aud.muted=false;aud.volume=IOS_HOLD_VOLUME;}catch{}
   setPausedUI();
 }
 function holdIOSMediaSessionAfterSystemPause(){
@@ -733,7 +734,7 @@ function holdIOSMediaSessionAfterSystemPause(){
       await _resumeAudioContext();
       if(!S.cur||IM._uStop||!S.softPaused)return;
       if(_needsStreamReload()){aud.src=S.cur.u;aud.load();}
-      aud.muted=true;aud.volume=0;
+      aud.muted=false;aud.volume=IOS_HOLD_VOLUME;
       await aud.play();
       if(S.cur&&!IM._uStop&&S.softPaused){setPausedUI();updateMeta(S.cur);syncMediaSessionState();}
     }catch{
